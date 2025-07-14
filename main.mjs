@@ -9,18 +9,18 @@ const {
   GITHUB_RUN_URL,
 } = process.env;
 
-async function pushServerchanClassic(text) {
+async function pushServerchanTurbo(text) {
   if (!SCKEY_SENDKEY) return;
   try {
-    await fetch(`https://sc.ftqq.com/${SCKEY_SENDKEY}.send`, {
+    await fetch(`https://sctapi.ftqq.com/${SCKEY_SENDKEY}.send`, {
       method: 'POST',
       body: new URLSearchParams({
-        text: 'Xserver VPS续期脚本',
+        title: 'Xserver VPS续期脚本',
         desp: text,
       }),
     });
   } catch (e) {
-    console.warn('Server酱推送失败:', e);
+    console.warn('Server酱Turbo推送失败:', e);
   }
 }
 
@@ -52,15 +52,14 @@ async function pushServerchanClassic(text) {
 
     await setTimeout(3000);
 
-    await pushServerchanClassic(`✅ VPS续期成功！\n\n[查看运行记录](${GITHUB_RUN_URL})`);
+    await pushServerchanTurbo(`✅ VPS续期成功！\n\n[查看运行记录](${GITHUB_RUN_URL})`);
   } catch (e) {
     console.error(e);
-    // 截图方便排查
     try {
       const buf = await page.screenshot();
       await writeFile('last.png', buf);
     } catch {}
-    await pushServerchanClassic(`❌ VPS续期失败！\n\n${e}\n\n[查看运行记录](${GITHUB_RUN_URL})`);
+    await pushServerchanTurbo(`❌ VPS续期失败！\n\n${e}\n\n[查看运行记录](${GITHUB_RUN_URL})`);
   } finally {
     await setTimeout(2000);
     await recorder.stop();
