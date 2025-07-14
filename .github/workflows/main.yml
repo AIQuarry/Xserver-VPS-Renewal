@@ -2,40 +2,13 @@ name: Xserver VPS Renewal
 
 on:
   schedule:
-    - cron: '0 0 * * *'   # 每天UTC时间00:00触发（日本时间09:00）
+    - cron: '45 0 * * *'   # 每天UTC时间00:45（日本时间09:45）
   workflow_dispatch:       # 支持手动触发
 
 jobs:
   renew:
     runs-on: ubuntu-latest
     steps:
-      - name: Calculate random execution time
-        id: random-time
-        run: |
-          # 计算日本时间07:00到23:00之间的随机分钟数（420-1380分钟）
-          min_minutes=420   # 07:00 JST = 22:00 UTC (前一天)
-          max_minutes=1380  # 23:00 JST = 14:00 UTC
-          
-          # 生成随机分钟数 (420-1380)
-          random_minutes=$(( RANDOM % (max_minutes - min_minutes + 1) + min_minutes ))
-          
-          # 计算延迟秒数
-          delay_seconds=$(( random_minutes * 60 ))
-          
-          # 转换为可读时间格式
-          random_hour=$(( random_minutes / 60 ))
-          random_minute=$(( random_minutes % 60 ))
-          jst_time=$(printf "%02d:%02d" $random_hour $random_minute)
-          
-          echo "随机执行时间：日本时间 $jst_time"
-          echo "delay_seconds=$delay_seconds" >> $GITHUB_OUTPUT
-          echo "jst_time=$jst_time" >> $GITHUB_OUTPUT
-
-      - name: Wait for random time
-        uses: juliangruber/sleep-action@v1.0.0
-        with:
-          time: ${{ steps.random-time.outputs.delay_seconds }}s
-
       - name: Checkout repository
         uses: actions/checkout@v3
 
@@ -62,20 +35,20 @@ jobs:
           EMAIL: ${{ secrets.EMAIL }}
           PASSWORD: ${{ secrets.PASSWORD }}
         run: |
-          echo "开始执行续订脚本（预定时间：${{ steps.random-time.outputs.jst_time }} JST）"
+          echo "开始执行续订脚本（日本时间 09:45）"
           node main.mjs
 
       - name: Upload recording
         uses: actions/upload-artifact@v4
         with:
-          name: recording-${{ steps.random-time.outputs.jst_time | replace(':', '-') }}
+          name: recording-0945
           path: recording.webm
 
       - name: Upload error screenshot
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: error-screenshot-${{ steps.random-time.outputs.jst_time | replace(':', '-') }}
+          name: error-screenshot-0945
           path: error.png
 
       - name: Send ServerChan notification
@@ -87,7 +60,7 @@ jobs:
           message: |
             ${{ steps.renewal-script.outcome == 'success' && '✅ Xserver VPS 续订成功！' || '❌ Xserver VPS 续订失败！' }}
             
-            执行时间: ${{ steps.random-time.outputs.jst_time }} JST
+            执行时间: 09:45 JST
             运行状态: ${{ steps.renewal-script.outcome }}
             工作流程ID: ${{ github.run_id }}
             运行详情: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
