@@ -2,7 +2,7 @@ name: Xserver VPS Renewal
 
 on:
   schedule:
-    - cron: '45 0 * * *'  # UTC 07:00, 15:00, 23:00
+    - cron: '0 7,15,23 * * *'
   workflow_dispatch:
 
 jobs:
@@ -11,28 +11,23 @@ jobs:
     env:
       EMAIL: ${{ secrets.EMAIL }}
       PASSWORD: ${{ secrets.PASSWORD }}
-      SCKEY_SENDKEY: ${{ secrets.SERVER_CHAN_SENDKEY }}  # 经典 Server 酱 SendKey
+      SCKEY_SENDKEY: ${{ secrets.SCKEY_SENDKEY }}
       GITHUB_RUN_URL: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Install system dependencies and puppeteer
-        run: |
+      - run: |
           sudo apt-get -qq update
           sudo apt-get -yqq install --no-install-recommends ffmpeg fonts-noto-cjk
           yarn add puppeteer
 
-      - name: Run renewal script
-        run: node main.mjs
+      - run: node main.mjs
 
-      - name: Upload artifacts (record + screenshot)
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: puppeteer-output
