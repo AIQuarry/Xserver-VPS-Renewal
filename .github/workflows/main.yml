@@ -2,54 +2,72 @@ name: Xserver VPS Renewal
 
 on:
   schedule:
-    - cron: '45 0 * * *'  # 每天 UTC 00:45，对应日本时间 09:45
+    # 每天 UTC 00:45（日本时间 09:45）
+    - cron: '45 0 * * *'
   workflow_dispatch:
 
 jobs:
   renew:
     runs-on: ubuntu-latest
+
     steps:
+      # 1️⃣ 拉取代码
       - name: Checkout repository
         uses: actions/checkout@v3
 
+      # 2️⃣ 安装 Node.js，并自动启用 Corepack（内置 yarn）
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'yarn'
+          cache: |
+            yarn
+          cache-dependency-path: |
+            yarn.lock   # 仅当存在 yarn.lock 时启用缓存
 
+      # 3️⃣ 安装系统依赖 + JS 依赖
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -yqq --no-install-recommends \
             fonts-noto-cjk \
             xvfb
-          yarn install
+          corepack enable
+          yarn install --immutable
 
+      # 4️⃣ 运行续订脚本
       - name: Run renewal script
         id: renewal
         env:
           EMAIL: ${{ secrets.EMAIL }}
           PASSWORD: ${{ secrets.PASSWORD }}
         run: |
-          echo "开始执行续订脚本..."
+          echo "📢 开始执行续订脚本..."
           node main.mjs
 
-      - name: Upload error screenshot (if failed)
+      # 5️⃣ 仅在失败时上传截图（若截图文件不存在则忽略）
+      - name: Upload error screenshot
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: error-screenshot
           path: error.png
+          if-no-files-found: ignore
 
+      # 6️⃣ Server酱通知（无论成功失败都会发送）
       - name: Notify via Server酱
         if: always()
+        env:
+          SENDKEY: ${{ secrets.SERVER_CHAN_SENDKEY }}
+          RESULT: ${{ steps.renewal.outcome }}
+          RUN_URL: "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
         run: |
-          TITLE="Xserver VPS 续订 ${{ steps.renewal.outcome == 'success' && '成功' || '失败' }}"
-          STATUS="状态: ${{ steps.renewal.outcome }}"
-          TIME="时间: $(TZ=Asia/Tokyo date '+%Y-%m-%d %H:%M:%S')"
-          LINK="查看日志：https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          TITLE=$(printf "Xserver VPS 续订 %s" "$( [ "$RESULT" = "success" ] && echo 成功 || echo 失败 )")
+          DESP=$(printf "状态: %s\n时间: %s\n日志: %s" \
+            "$RESULT" \
+            "$(TZ=Asia/Tokyo date '+%Y-%m-%d %H:%M:%S')" \
+            "$RUN_URL")
 
-          curl -X POST "https://sctapi.ftqq.com/${{ secrets.SERVER_CHAN_SENDKEY }}.send" \
-            -d "title=$TITLE" \
-            -d "desp=$STATUS%0A$TIME%0A$LINK"
+          # URL-encode并发送
+          api="https://sctapi.ftqq.com/${SENDKEY}.send"
+          curl -G --data-urlencode "title=${TITLE}" --data-urlencode "desp=${DESP}" "$api"
