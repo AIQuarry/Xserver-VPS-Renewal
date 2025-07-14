@@ -2,67 +2,42 @@ name: Xserver VPS Renewal
 
 on:
   schedule:
-    # 每天 UTC 00:45（日本时间 09:45）
-    - cron: '45 0 * * *'
+    - cron: '45 0 * * *'   # 每天 07:00, 15:00, 23:00 UTC
   workflow_dispatch:
 
 jobs:
   renew:
     runs-on: ubuntu-latest
-
+    env:
+      EMAIL: ${{ secrets.EMAIL }}
+      PASSWORD: ${{ secrets.PASSWORD }}
+      SCKEY_TURBO: ${{ secrets.SCKEY_TURBO }}
+      GITHUB_RUN_URL: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
     steps:
-      # 1️⃣ 拉取代码
-      - name: Checkout repository
-        uses: actions/checkout@v3
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-      # 2️⃣ 设置 Node.js（使用 npm，不启用 yarn 缓存）
-      - name: Setup Node.js
+      - name: Setup Node.js with pnpm
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'pnpm'
 
-      # 3️⃣ 安装系统依赖 + 项目依赖
       - name: Install dependencies
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -yqq --no-install-recommends \
-            fonts-noto-cjk \
-            xvfb
-          npm install
+          corepack enable
+          pnpm install --frozen-lockfile
+          sudo apt-get -qq update
+          sudo apt-get -yqq install --no-install-recommends ffmpeg fonts-noto-cjk
 
-      # 4️⃣ 运行续订脚本
-      - name: Run renewal script
-        id: renewal
-        env:
-          EMAIL: ${{ secrets.EMAIL }}
-          PASSWORD: ${{ secrets.PASSWORD }}
-        run: |
-          echo "📢 开始执行续订脚本..."
-          node main.mjs
+      - name: Run renew script
+        run: node main.mjs
 
-      # 5️⃣ 上传错误截图（如果失败）
-      - name: Upload error screenshot
-        if: failure()
+      - name: Upload artifacts (record + screenshot)
         uses: actions/upload-artifact@v4
-        with:
-          name: error-screenshot
-          path: error.png
-          if-no-files-found: ignore
-
-      # 6️⃣ Server酱通知
-      - name: Notify via Server酱
         if: always()
-        env:
-          SENDKEY: ${{ secrets.SERVER_CHAN_SENDKEY }}
-          RESULT: ${{ steps.renewal.outcome }}
-          RUN_URL: "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-        run: |
-          TITLE=$(printf "Xserver VPS 续订 %s" "$( [ "$RESULT" = "success" ] && echo 成功 || echo 失败 )")
-          DESP=$(printf "状态: %s\n时间: %s\n日志: %s" \
-            "$RESULT" \
-            "$(TZ=Asia/Tokyo date '+%Y-%m-%d %H:%M:%S')" \
-            "$RUN_URL")
-
-          curl -G --data-urlencode "title=${TITLE}" \
-                  --data-urlencode "desp=${DESP}" \
-                  "https://sctapi.ftqq.com/${SENDKEY}.send"
+        with:
+          name: puppeteer-output
+          path: |
+            recording.webm
+            last.png
