@@ -68,31 +68,31 @@ jobs:
       - name: Upload recording
         uses: actions/upload-artifact@v4
         with:
-          name: recording-${{ steps.random-time.outputs.jst_time }}
+          name: recording-${{ steps.random-time.outputs.jst_time | replace(':', '-') }}
           path: recording.webm
 
       - name: Upload error screenshot
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: error-screenshot-${{ steps.random-time.outputs.jst_time }}
+          name: error-screenshot-${{ steps.random-time.outputs.jst_time | replace(':', '-') }}
           path: error.png
 
       - name: Send ServerChan notification
         id: serverchan
-        if: always()  # 无论成功失败都发送通知
+        if: always()
         uses: appleboy/telegram-action@master
         with:
           to: ${{ secrets.SERVER_CHAN_SENDKEY }}
           message: |
             ${{ steps.renewal-script.outcome == 'success' && '✅ Xserver VPS 续订成功！' || '❌ Xserver VPS 续订失败！' }}
             
-            **执行时间**: ${{ steps.random-time.outputs.jst_time }} JST
-            **运行状态**: ${{ steps.renewal-script.outcome }}
-            **工作流程ID**: ${{ github.run_id }}
-            **运行详情**: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            执行时间: ${{ steps.random-time.outputs.jst_time }} JST
+            运行状态: ${{ steps.renewal-script.outcome }}
+            工作流程ID: ${{ github.run_id }}
+            运行详情: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
             
             ${{ failure() && '⚠️ 错误截图已上传至Artifacts，请及时处理！' || '🎉 VPS服务已成功续订！' }}
           format: html
         env:
-          TELEGRAM_TOKEN: "dummy"  # ServerChan不需要token，但action需要此变量
+          TELEGRAM_TOKEN: "dummy"
