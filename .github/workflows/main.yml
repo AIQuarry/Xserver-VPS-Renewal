@@ -45,7 +45,7 @@ jobs:
           path: recording.webm
 
       - name: Upload error screenshot
-        if: failure()
+        if: ${{ failure() }}
         uses: actions/upload-artifact@v4
         with:
           name: error-screenshot-0945
@@ -65,7 +65,7 @@ jobs:
             工作流程ID: ${{ github.run_id }}
             运行详情: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
             
-            ${{ failure() && '⚠️ 错误截图已上传至Artifacts，请及时处理！' || '🎉 VPS服务已成功续订！' }}
+            ${{ steps.renewal-script.outcome == 'failure' && '⚠️ 错误截图已上传至Artifacts，请及时处理！' || '🎉 VPS服务已成功续订！' }}
           format: html
         env:
           TELEGRAM_TOKEN: "dummy"
