@@ -1,142 +1,90 @@
 import puppeteer from 'puppeteer';
 import { setTimeout } from 'node:timers/promises';
 
-// 日志函数，带时间戳和颜色标记
-const log = (message, color = '\x1b[36m') => {
-    const timestamp = new Date().toISOString();
-    console.log(`${color}[${timestamp}] ${message}\x1b[0m`);
+// 日志函数（带颜色与时间戳）
+const log = (msg, color = '\x1b[36m') => {
+  const time = new Date().toISOString();
+  console.log(`${color}[${time}] ${msg}\x1b[0m`);
 };
 
-log('开始执行 Xserver VPS 自动续订脚本', '\x1b[32m');
+(async () => {
+  log('开始执行 Xserver VPS 自动续订脚本', '\x1b[32m');
 
-const browser = await puppeteer.launch({
-    headless: true, // 明确设置无头模式
-    defaultViewport: { width: 1200, height: 800 }, // 增加视口大小
+  const browser = await puppeteer.launch({
+    headless: true,
+    defaultViewport: { width: 1200, height: 800 },
     args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--lang=ja-JP' // 设置日语环境
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--lang=ja-JP'
     ],
-    timeout: 60000 // 增加浏览器启动超时时间
-});
+    timeout: 60000
+  });
 
-log('浏览器已启动');
+  const page = await browser.newPage();
 
-try {
-    const [page] = await browser.pages();
-    log('页面已创建');
-    
-    // 启动屏幕录制
-    const recorder = await page.screencast({ 
-        path: 'recording.webm',
-        fps: 12, // 降低帧率减少文件大小
-        scale: 0.8 // 缩小录制比例
-    });
-    log('屏幕录制已启动');
-
-    // 设置页面超时和语言
+  try {
+    await page.setExtraHTTPHeaders({ 'Accept-Language': 'ja-JP' });
     await page.setDefaultNavigationTimeout(60000);
-    await page.setExtraHTTPHeaders({
-        'Accept-Language': 'ja-JP'
-    });
 
-    // 步骤1: 导航到登录页面
+    // 登录页面
     log('导航到登录页面...');
     await page.goto('https://secure.xserver.ne.jp/xapanel/login/xserver/', {
-        waitUntil: 'networkidle2',
-        timeout: 45000
+      waitUntil: 'networkidle2',
+      timeout: 45000
     });
-    log('登录页面已加载');
 
-    // 步骤2: 填写登录表单
-    log('填写登录信息...');
-    await page.locator('#memberid').waitFor({ timeout: 15000 });
-    await page.locator('#memberid').fill(process.env.EMAIL);
-    await page.locator('#user_password').fill(process.env.PASSWORD);
-    log('登录信息已填写');
+    log('填写登录表单...');
+    await page.waitForSelector('#memberid', { timeout: 15000 });
+    await page.type('#memberid', process.env.EMAIL);
+    await page.type('#user_password', process.env.PASSWORD);
 
-    // 步骤3: 提交登录表单
-    log('提交登录表单...');
-    const loginPromise = page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 });
-    await page.locator('text=ログインする').click();
-    await loginPromise;
-    log('登录成功');
+    log('提交登录...');
+    await Promise.all([
+      page.waitForNavigation({ waitUntil: 'networkidle2' }),
+      page.click('input[type="submit"]')
+    ]);
 
-    // 步骤4: 导航到VPS管理页面
-    log('导航到VPS管理页面...');
+    // 进入VPS管理
+    log('导航到 VPS 管理页面...');
     await page.goto('https://secure.xserver.ne.jp/xapanel/xvps/index', {
-        waitUntil: 'networkidle2',
-        timeout: 45000
+      waitUntil: 'networkidle2'
     });
-    log('VPS管理页面已加载');
 
-    // 步骤5: 打开菜单
+    // 打开菜单
     log('打开菜单...');
-    await page.locator('.contract__menuIcon').waitFor({ timeout: 15000 });
-    await page.locator('.contract__menuIcon').click();
-    await setTimeout(800); // 添加短暂延迟让菜单动画完成
-    log('菜单已打开');
+    await page.waitForSelector('.contract__menuIcon', { timeout: 15000 });
+    await page.click('.contract__menuIcon');
+    await setTimeout(1000);
 
-    // 步骤6: 访问契约信息
+    // 访问契约信息
     log('访问契约信息...');
-    await page.locator('text=契約情報').waitFor({ timeout: 15000 });
-    await page.locator('text=契約情報').click();
-    await setTimeout(800);
-    log('契约信息页面已打开');
+    await page.click('text=契約情報');
+    await setTimeout(1000);
 
-    // 步骤7: 点击更新按钮
+    // 点击“更新する”
     log('点击更新按钮...');
-    await page.locator('text=更新する').waitFor({ timeout: 15000 });
-    await page.locator('text=更新する').click();
-    await setTimeout(800);
-    log('更新页面已打开');
+    await page.click('text=更新する');
+    await setTimeout(1000);
 
-    // 步骤8: 选择继续免费方案
+    // 选择继续免费
     log('选择继续免费方案...');
-    await page.locator('text=引き続き無料VPSの利用を継続する').waitFor({ timeout: 15000 });
-    await page.locator('text=引き続き無料VPSの利用を継続する').click();
-    
-    // 等待确认页面加载
-    const confirmPromise = page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 });
-    await confirmPromise;
-    log('已选择继续免费方案');
+    await page.click('text=引き続き無料VPSの利用を継続する');
+    await page.waitForNavigation({ waitUntil: 'networkidle2' });
 
-    // 步骤9: 确认继续使用
+    // 最终确认
     log('确认继续使用...');
-    await page.locator('text=無料VPSの利用を継続する').waitFor({ timeout: 15000 });
-    await page.locator('text=無料VPSの利用を継続する').click();
-    log('续订请求已提交');
+    await page.click('text=無料VPSの利用を継続する');
 
-    // 添加额外等待确保操作完成
-    await setTimeout(3000);
-    log('操作流程已完成', '\x1b[32m');
-
-} catch (error) {
-    log(`发生错误: ${error.message}`, '\x1b[31m');
-    console.error(error.stack);
-    
-    // 保存错误截图
+    log('✅ VPS续订成功！', '\x1b[32m');
+  } catch (err) {
+    log(`❌ 出现错误: ${err.message}`, '\x1b[31m');
     await page.screenshot({ path: 'error.png' });
-    log('已保存错误截图: error.png', '\x1b[31m');
-    
-    throw error; // 重新抛出错误以便GitHub Actions标记失败
-
-} finally {
-    log('正在清理资源...');
-    
-    // 确保屏幕录制正常停止
-    if (recorder) {
-        await setTimeout(3000); // 确保所有操作都被录制
-        await recorder.stop();
-        log('屏幕录制已停止');
-    }
-    
-    // 关闭浏览器
-    if (browser) {
-        await browser.close();
-        log('浏览器已关闭');
-    }
-    
-    log('脚本执行完成', '\x1b[32m');
-}
+    log('已保存错误截图 error.png');
+    process.exit(1); // 标记运行失败
+  } finally {
+    await browser.close();
+    log('浏览器已关闭');
+  }
+})();
