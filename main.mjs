@@ -6,31 +6,31 @@ import { setTimeout as delay } from 'node:timers/promises';
 const {
   EMAIL,
   PASSWORD,
-  SCKEY_TURBO,
-  GITHUB_RUN_URL,      // GitHub 会注入
-  GITHUB_RUN_ID,
-  GITHUB_SERVER_URL,
-  GITHUB_REPOSITORY
+  SERVER_CHAN_SENDKEY,       // 经典版 Server酱 SendKey，环境变量名
+  GITHUB_RUN_URL,
 } = process.env;
 
 const baseUrl = 'https://secure.xserver.ne.jp';
 
-async function pushServerchan(txt) {
-  if (!SCKEY_TURBO) return;
-  const url = `https://sctapi.ftqq.com/${SCKEY_TURBO}.send`;
+async function pushServerchanClassic(text) {
+  if (!SCKEY_SENDKEY) return;
+  const url = `https://sc.ftqq.com/${SCKEY_SENDKEY}.send`;
   try {
     await fetch(url, {
       method: 'POST',
       body: new URLSearchParams({
-        title: 'Xserver VPS 续期脚本',
-        desp: txt
-      })
+        text: 'Xserver VPS续期脚本', // 标题
+        desp: text,                // 内容
+      }),
     });
-  } catch { /* ignore */ }
+  } catch (err) {
+    console.warn('Server酱推送失败:', err);
+  }
 }
 
 let browser;
 let recorder;
+
 try {
   browser = await puppeteer.launch({
     headless: 'new',
@@ -41,7 +41,7 @@ try {
   const [page] = await browser.pages();
   recorder = await page.screencast({ path: 'recording.webm' });
 
-  page.setDefaultTimeout(20_000);
+  page.setDefaultTimeout(20000);
 
   await page.goto(`${baseUrl}/xapanel/login/xserver/`, { waitUntil: 'networkidle2' });
   await page.type('#memberid', EMAIL);
@@ -60,8 +60,9 @@ try {
   await page.waitForNavigation({ waitUntil: 'networkidle2' });
   await page.click('text=無料VPSの利用を継続する');
 
-  await delay(3000); // 录多 3 秒结尾画面
-  await pushServerchan(`✅ 自动续期成功\n\n[查看运行记录](${GITHUB_RUN_URL})`);
+  await delay(3000);
+
+  await pushServerchanClassic(`✅ VPS续期成功！\n\n[运行记录](${GITHUB_RUN_URL})`);
 } catch (e) {
   console.error(e);
   if (browser) {
@@ -71,7 +72,7 @@ try {
       await writeFile('last.png', buf);
     }
   }
-  await pushServerchan(`❌ 自动续期失败\n\n${e}\n\n[运行记录](${GITHUB_RUN_URL})`);
+  await pushServerchanClassic(`❌ VPS续期失败！\n\n${e}\n\n[运行记录](${GITHUB_RUN_URL})`);
 } finally {
   await delay(2000);
   if (recorder) await recorder.stop();
