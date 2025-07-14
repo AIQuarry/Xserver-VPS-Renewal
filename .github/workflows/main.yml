@@ -2,8 +2,8 @@ name: Xserver VPS Renewal
 
 on:
   schedule:
-    - cron: '45 0 * * *'   # 每天UTC时间00:45（日本时间09:45）
-  workflow_dispatch:       # 支持手动触发
+    - cron: '45 0 * * *'  # 每天 UTC 00:45，对应日本时间 09:45
+  workflow_dispatch:
 
 jobs:
   renew:
@@ -18,54 +18,38 @@ jobs:
           node-version: '20'
           cache: 'yarn'
 
-      - name: Install system dependencies
+      - name: Install dependencies
         run: |
-          sudo apt-get -qq update
-          sudo apt-get -yqq install --no-install-recommends \
-            ffmpeg \
+          sudo apt-get update -qq
+          sudo apt-get install -yqq --no-install-recommends \
             fonts-noto-cjk \
             xvfb
-
-      - name: Install project dependencies
-        run: yarn install
+          yarn install
 
       - name: Run renewal script
-        id: renewal-script
+        id: renewal
         env:
           EMAIL: ${{ secrets.EMAIL }}
           PASSWORD: ${{ secrets.PASSWORD }}
         run: |
-          echo "开始执行续订脚本（日本时间 09:45）"
+          echo "开始执行续订脚本..."
           node main.mjs
 
-      - name: Upload recording
+      - name: Upload error screenshot (if failed)
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: recording-0945
-          path: recording.webm
-
-      - name: Upload error screenshot
-        if: ${{ failure() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: error-screenshot-0945
+          name: error-screenshot
           path: error.png
 
-      - name: Send ServerChan notification
-        id: serverchan
+      - name: Notify via Server酱
         if: always()
-        uses: appleboy/telegram-action@master
-        with:
-          to: ${{ secrets.SERVER_CHAN_SENDKEY }}
-          message: |
-            ${{ steps.renewal-script.outcome == 'success' && '✅ Xserver VPS 续订成功！' || '❌ Xserver VPS 续订失败！' }}
-            
-            执行时间: 09:45 JST
-            运行状态: ${{ steps.renewal-script.outcome }}
-            工作流程ID: ${{ github.run_id }}
-            运行详情: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-            
-            ${{ steps.renewal-script.outcome == 'failure' && '⚠️ 错误截图已上传至Artifacts，请及时处理！' || '🎉 VPS服务已成功续订！' }}
-          format: html
-        env:
-          TELEGRAM_TOKEN: "dummy"
+        run: |
+          TITLE="Xserver VPS 续订 ${{ steps.renewal.outcome == 'success' && '成功' || '失败' }}"
+          STATUS="状态: ${{ steps.renewal.outcome }}"
+          TIME="时间: $(TZ=Asia/Tokyo date '+%Y-%m-%d %H:%M:%S')"
+          LINK="查看日志：https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          curl -X POST "https://sctapi.ftqq.com/${{ secrets.SERVER_CHAN_SENDKEY }}.send" \
+            -d "title=$TITLE" \
+            -d "desp=$STATUS%0A$TIME%0A$LINK"
