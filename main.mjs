@@ -1,5 +1,4 @@
 import puppeteer from 'puppeteer';
-import fetch from 'node-fetch';
 import { writeFile } from 'fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 
