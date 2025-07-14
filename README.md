@@ -69,7 +69,7 @@
 
 ## 📄 开源协议
 
-MIT License © 2025 [Your Name]
+MIT License © 2025 [AI]
 
 ---
 
