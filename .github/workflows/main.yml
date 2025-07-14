@@ -1,0 +1,98 @@
+name: Xserver VPS Renewal
+
+on:
+  schedule:
+    - cron: '0 0 * * *'   # 每天UTC时间00:00触发（日本时间09:00）
+  workflow_dispatch:       # 支持手动触发
+
+jobs:
+  renew:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Calculate random execution time
+        id: random-time
+        run: |
+          # 计算日本时间07:00到23:00之间的随机分钟数（420-1380分钟）
+          min_minutes=420   # 07:00 JST = 22:00 UTC (前一天)
+          max_minutes=1380  # 23:00 JST = 14:00 UTC
+          
+          # 生成随机分钟数 (420-1380)
+          random_minutes=$(( RANDOM % (max_minutes - min_minutes + 1) + min_minutes ))
+          
+          # 计算延迟秒数
+          delay_seconds=$(( random_minutes * 60 ))
+          
+          # 转换为可读时间格式
+          random_hour=$(( random_minutes / 60 ))
+          random_minute=$(( random_minutes % 60 ))
+          jst_time=$(printf "%02d:%02d" $random_hour $random_minute)
+          
+          echo "随机执行时间：日本时间 $jst_time"
+          echo "delay_seconds=$delay_seconds" >> $GITHUB_OUTPUT
+          echo "jst_time=$jst_time" >> $GITHUB_OUTPUT
+
+      - name: Wait for random time
+        uses: juliangruber/sleep-action@v1.0.0
+        with:
+          time: ${{ steps.random-time.outputs.delay_seconds }}s
+
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'yarn'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get -qq update
+          sudo apt-get -yqq install --no-install-recommends \
+            ffmpeg \
+            fonts-noto-cjk \
+            xvfb
+
+      - name: Install project dependencies
+        run: yarn install
+
+      - name: Run renewal script
+        id: renewal-script
+        env:
+          EMAIL: ${{ secrets.EMAIL }}
+          PASSWORD: ${{ secrets.PASSWORD }}
+        run: |
+          echo "开始执行续订脚本（预定时间：${{ steps.random-time.outputs.jst_time }} JST）"
+          node main.mjs
+
+      - name: Upload recording
+        uses: actions/upload-artifact@v4
+        with:
+          name: recording-${{ steps.random-time.outputs.jst_time }}
+          path: recording.webm
+
+      - name: Upload error screenshot
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: error-screenshot-${{ steps.random-time.outputs.jst_time }}
+          path: error.png
+
+      - name: Send ServerChan notification
+        id: serverchan
+        if: always()  # 无论成功失败都发送通知
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.SERVER_CHAN_SENDKEY }}
+          message: |
+            ${{ steps.renewal-script.outcome == 'success' && '✅ Xserver VPS 续订成功！' || '❌ Xserver VPS 续订失败！' }}
+            
+            **执行时间**: ${{ steps.random-time.outputs.jst_time }} JST
+            **运行状态**: ${{ steps.renewal-script.outcome }}
+            **工作流程ID**: ${{ github.run_id }}
+            **运行详情**: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            
+            ${{ failure() && '⚠️ 错误截图已上传至Artifacts，请及时处理！' || '🎉 VPS服务已成功续订！' }}
+          format: html
+        env:
+          TELEGRAM_TOKEN: "dummy"  # ServerChan不需要token，但action需要此变量
