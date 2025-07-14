@@ -1,90 +1,79 @@
 import puppeteer from 'puppeteer';
-import { setTimeout } from 'node:timers/promises';
+import fetch from 'node-fetch';
+import { writeFile } from 'fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 
-// 日志函数（带颜色与时间戳）
-const log = (msg, color = '\x1b[36m') => {
-  const time = new Date().toISOString();
-  console.log(`${color}[${time}] ${msg}\x1b[0m`);
-};
+const {
+  EMAIL,
+  PASSWORD,
+  SCKEY_TURBO,
+  GITHUB_RUN_URL,      // GitHub 会注入
+  GITHUB_RUN_ID,
+  GITHUB_SERVER_URL,
+  GITHUB_REPOSITORY
+} = process.env;
 
-(async () => {
-  log('开始执行 Xserver VPS 自动续订脚本', '\x1b[32m');
+const baseUrl = 'https://secure.xserver.ne.jp';
 
-  const browser = await puppeteer.launch({
-    headless: true,
-    defaultViewport: { width: 1200, height: 800 },
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--lang=ja-JP'
-    ],
-    timeout: 60000
+async function pushServerchan(txt) {
+  if (!SCKEY_TURBO) return;
+  const url = `https://sctapi.ftqq.com/${SCKEY_TURBO}.send`;
+  try {
+    await fetch(url, {
+      method: 'POST',
+      body: new URLSearchParams({
+        title: 'Xserver VPS 续期脚本',
+        desp: txt
+      })
+    });
+  } catch { /* ignore */ }
+}
+
+let browser;
+let recorder;
+try {
+  browser = await puppeteer.launch({
+    headless: 'new',
+    defaultViewport: { width: 1080, height: 1024 },
+    args: ['--no-sandbox', '--disable-setuid-sandbox']
   });
 
-  const page = await browser.newPage();
+  const [page] = await browser.pages();
+  recorder = await page.screencast({ path: 'recording.webm' });
 
-  try {
-    await page.setExtraHTTPHeaders({ 'Accept-Language': 'ja-JP' });
-    await page.setDefaultNavigationTimeout(60000);
+  page.setDefaultTimeout(20_000);
 
-    // 登录页面
-    log('导航到登录页面...');
-    await page.goto('https://secure.xserver.ne.jp/xapanel/login/xserver/', {
-      waitUntil: 'networkidle2',
-      timeout: 45000
-    });
+  await page.goto(`${baseUrl}/xapanel/login/xserver/`, { waitUntil: 'networkidle2' });
+  await page.type('#memberid', EMAIL);
+  await page.type('#user_password', PASSWORD);
+  await Promise.all([
+    page.waitForNavigation({ waitUntil: 'networkidle2' }),
+    page.click('input[type=submit]')
+  ]);
 
-    log('填写登录表单...');
-    await page.waitForSelector('#memberid', { timeout: 15000 });
-    await page.type('#memberid', process.env.EMAIL);
-    await page.type('#user_password', process.env.PASSWORD);
+  await page.goto(`${baseUrl}/xapanel/xvps/index`, { waitUntil: 'networkidle2' });
+  await page.waitForSelector('.contract__menuIcon');
+  await page.click('.contract__menuIcon');
+  await page.click('text=契約情報');
+  await page.click('text=更新する');
+  await page.click('text=引き続き無料VPSの利用を継続する');
+  await page.waitForNavigation({ waitUntil: 'networkidle2' });
+  await page.click('text=無料VPSの利用を継続する');
 
-    log('提交登录...');
-    await Promise.all([
-      page.waitForNavigation({ waitUntil: 'networkidle2' }),
-      page.click('input[type="submit"]')
-    ]);
-
-    // 进入VPS管理
-    log('导航到 VPS 管理页面...');
-    await page.goto('https://secure.xserver.ne.jp/xapanel/xvps/index', {
-      waitUntil: 'networkidle2'
-    });
-
-    // 打开菜单
-    log('打开菜单...');
-    await page.waitForSelector('.contract__menuIcon', { timeout: 15000 });
-    await page.click('.contract__menuIcon');
-    await setTimeout(1000);
-
-    // 访问契约信息
-    log('访问契约信息...');
-    await page.click('text=契約情報');
-    await setTimeout(1000);
-
-    // 点击“更新する”
-    log('点击更新按钮...');
-    await page.click('text=更新する');
-    await setTimeout(1000);
-
-    // 选择继续免费
-    log('选择继续免费方案...');
-    await page.click('text=引き続き無料VPSの利用を継続する');
-    await page.waitForNavigation({ waitUntil: 'networkidle2' });
-
-    // 最终确认
-    log('确认继续使用...');
-    await page.click('text=無料VPSの利用を継続する');
-
-    log('✅ VPS续订成功！', '\x1b[32m');
-  } catch (err) {
-    log(`❌ 出现错误: ${err.message}`, '\x1b[31m');
-    await page.screenshot({ path: 'error.png' });
-    log('已保存错误截图 error.png');
-    process.exit(1); // 标记运行失败
-  } finally {
-    await browser.close();
-    log('浏览器已关闭');
+  await delay(3000); // 录多 3 秒结尾画面
+  await pushServerchan(`✅ 自动续期成功\n\n[查看运行记录](${GITHUB_RUN_URL})`);
+} catch (e) {
+  console.error(e);
+  if (browser) {
+    const [page] = await browser.pages();
+    if (page) {
+      const buf = await page.screenshot();
+      await writeFile('last.png', buf);
+    }
   }
-})();
+  await pushServerchan(`❌ 自动续期失败\n\n${e}\n\n[运行记录](${GITHUB_RUN_URL})`);
+} finally {
+  await delay(2000);
+  if (recorder) await recorder.stop();
+  if (browser) await browser.close();
+}
