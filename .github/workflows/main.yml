@@ -12,6 +12,7 @@ jobs:
       EMAIL: ${{ secrets.EMAIL }}
       PASSWORD: ${{ secrets.PASSWORD }}
       SCKEY_SENDKEY: ${{ secrets.SCKEY_SENDKEY }}
+      PROXY_SERVER: ${{ secrets.PROXY_SERVER }}
       GITHUB_RUN_URL: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
     steps:
       - uses: actions/checkout@v4
