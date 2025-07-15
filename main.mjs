@@ -11,7 +11,7 @@ const {
   PASSWORD,
   SCKEY_SENDKEY,
   GITHUB_RUN_URL,
-  PROXY_SERVER,          // 形如 http://user:pass@host:port
+  PROXY_SERVER,
 } = process.env;
 
 // ============ Server酱 Turbo 工具函数 ============ //
@@ -48,7 +48,7 @@ async function pushTurbo(title, desp, mediaIds = []) {
 const launchArgs = ['--no-sandbox', '--disable-setuid-sandbox'];
 if (PROXY_SERVER) {
   const p = new URL(PROXY_SERVER);
-  p.username = '';          // 去掉凭据，仅保留 host:port
+  p.username = '';
   p.password = '';
   launchArgs.push(`--proxy-server=${String(p).replace(/\/$/, '')}`);
 }
@@ -60,7 +60,6 @@ const browser = await puppeteer.launch({
 const [page] = await browser.pages();
 const recorder = await page.screencast({ path: 'recording.webm' });
 
-// 代理需要 407 鉴权
 if (PROXY_SERVER) {
   const { username, password } = new URL(PROXY_SERVER);
   if (username && password) await page.authenticate({ username, password });
@@ -112,7 +111,9 @@ try {
 
   // 等待几秒再停止录屏
   await setTimeout(2000);
-  await recorder.stop();
+  try {
+    await recorder.stop();
+  } catch {}
 
   // 录屏上传
   if (fs.existsSync('recording.webm')) {
@@ -136,6 +137,8 @@ try {
 
 } finally {
   await setTimeout(1500);
-  if (!recorder.isStopped()) await recorder.stop().catch(() => {});
+  try {
+    await recorder.stop();
+  } catch {}
   await browser.close();
 }
