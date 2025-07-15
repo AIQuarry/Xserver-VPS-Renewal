@@ -25,6 +25,7 @@ jobs:
           sudo apt-get -qq update
           sudo apt-get -yqq install --no-install-recommends ffmpeg fonts-noto-cjk
           yarn add puppeteer
+          yarn add puppeteer form-data
 
       - run: node main.mjs
 
