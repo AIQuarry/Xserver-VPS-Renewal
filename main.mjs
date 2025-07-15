@@ -84,23 +84,44 @@ try {
   await page.locator('text=引き続き無料VPSの利用を継続する').click();
   await page.waitForNavigation({ waitUntil: 'networkidle2' });
 
-  // 处理验证码
-  const base64 = await page.$eval('img[src^="data:"]', img => img.src);
-  const code = await fetch(
-    'https://captcha-120546510085.asia-northeast1.run.app',
-    { method: 'POST', body: base64 }
-  ).then(r => r.text());
-  await page.locator('[placeholder="上の画像の数字を入力"]').fill(code);
+  // 处理验证码，判断是否存在
+  const captchaImg = await page.$('img[src^="data:"]');
+  if (captchaImg) {
+    const base64 = await captchaImg.evaluate(img => img.src);
+    let code = '';
+    try {
+      code = await fetch('https://captcha-120546510085.asia-northeast1.run.app', {
+        method: 'POST',
+        body: base64,
+      }).then(r => r.text());
+    } catch (err) {
+      console.warn('验证码识别接口调用失败:', err);
+    }
+    if (code) {
+      await page.locator('[placeholder="上の画像の数字を入力"]').fill(code);
+    }
+  } else {
+    console.log('无验证码，跳过验证码填写');
+  }
 
-  // 最后确认
-  await page.locator('text=無料VPSの利用を継続する').click();
+  // 最后确认点击并等待导航完成
+  await Promise.all([
+    page.waitForNavigation({ waitUntil: 'networkidle2' }),
+    page.locator('text=無料VPSの利用を継続する').click(),
+  ]);
+
+  // 等待几秒再停止录屏
   await setTimeout(2000);
+  await recorder.stop();
 
   // 录屏上传
   if (fs.existsSync('recording.webm')) {
     mediaIds.push(await uploadMedia('recording.webm', 'recording.webm'));
   }
+
+  // 成功推送
   await pushTurbo('✅ Xserver VPS 续期成功', `[查看记录](${GITHUB_RUN_URL})`, mediaIds);
+
 } catch (e) {
   console.error(e);
   try {
@@ -110,9 +131,11 @@ try {
       mediaIds.push(await uploadMedia('last.png', 'last.png'));
     }
   } catch {}
+
   await pushTurbo('❌ Xserver VPS 续期失败', `${e}\n\n[记录](${GITHUB_RUN_URL})`, mediaIds);
+
 } finally {
   await setTimeout(1500);
-  await recorder.stop();
+  if (!recorder.isStopped()) await recorder.stop().catch(() => {});
   await browser.close();
 }
