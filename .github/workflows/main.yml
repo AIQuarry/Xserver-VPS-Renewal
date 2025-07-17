@@ -1,1 +1,22 @@
+name: Xserver VPS Renew
 
+on:
+  schedule:
+    - cron: '45 0 * * *'  # 日本时间 09:45
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      EMAIL: ${{ secrets.EMAIL }}
+      PASSWORD: ${{ secrets.PASSWORD }}
+      CAPTCHA_API_KEY: ${{ secrets.CAPTCHA_API_KEY }}
+      SCKEY_SENDKEY: ${{ secrets.SCKEY_SENDKEY }}
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: 20
+      - run: npm install
+      - run: node renew.js
