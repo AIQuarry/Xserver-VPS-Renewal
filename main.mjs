@@ -7,13 +7,16 @@ const MAX_RETRIES = 2
 
 async function uploadToChevereto(filePath) {
     const form = new FormData()
-    form.append('key', process.env.CHEVERETO_API_KEY)  // 使用环境变量
     form.append('format', 'json')
     form.append('source', fs.createReadStream(filePath))
 
     const response = await fetch('https://img.piacg.eu.org/api/1/upload', {
         method: 'POST',
-        body: form
+        body: form,
+        headers: {
+            'X-API-Key': process.env.CHEVERETO_API_KEY,
+            ...form.getHeaders()
+        }
     })
 
     const result = await response.json()
@@ -49,14 +52,14 @@ async function renewAttempt(attempt = 1) {
     try {
         console.log(`🔁 第 ${attempt} 次尝试`)
         await page.goto('https://secure.xserver.ne.jp/xapanel/login/xvps/', { waitUntil: 'networkidle2' })
-        await page.locator('#memberid').fill(process.env.EMAIL)
-        await page.locator('#user_password').fill(process.env.PASSWORD)
-        await page.locator('text=ログインする').click()
+        await page.type('#memberid', process.env.EMAIL)
+        await page.type('#user_password', process.env.PASSWORD)
+        await page.click('text=ログインする')
         await page.waitForNavigation({ waitUntil: 'networkidle2' })
 
-        await page.locator('a[href^="/xapanel/xvps/server/detail?id="]').click()
-        await page.locator('text=更新する').click()
-        await page.locator('text=引き続き無料VPSの利用を継続する').click()
+        await page.click('a[href^="/xapanel/xvps/server/detail?id="]')
+        await page.click('text=更新する')
+        await page.click('text=引き続き無料VPSの利用を継続する')
         await page.waitForNavigation({ waitUntil: 'networkidle2' })
 
         const captchaImg = await page.$('img[src^="data:"]')
@@ -84,11 +87,11 @@ async function renewAttempt(attempt = 1) {
                 }, 5000)
             })
 
-            await page.locator('[placeholder="上の画像の数字を入力"]').fill(code)
-            await page.locator('text=無料VPSの利用を継続する').click()
+            await page.type('[placeholder="上の画像の数字を入力"]', code)
+            await page.click('text=無料VPSの利用を継続する')
         } else {
             console.log('✅ 未检测到验证码，直接点击续期按钮')
-            await page.locator('text=無料VPSの利用を継続する').click()
+            await page.click('text=無料VPSの利用を継続する')
         }
 
         await page.waitForTimeout(3000)
@@ -132,5 +135,5 @@ async function renewAttempt(attempt = 1) {
     }
 }
 
-// 🔧 启动脚本
+// 启动脚本
 await renewAttempt()
