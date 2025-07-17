@@ -1,0 +1,68 @@
+name: Renew Xserver VPS
+
+on:
+  schedule:
+    - cron: '0 0 1 * *' # Monthly on the 1st at 00:00 UTC
+  workflow_dispatch:
+
+jobs:
+  renew:
+    runs-on: ubuntu-latest
+    env:
+      EMAIL: ${{ secrets.EMAIL }}
+      PASSWORD: ${{ secrets.PASSWORD }}
+      SCKEY_SENDKEY: ${{ secrets.SCKEY_SENDKEY }}
+      GITHUB_RUN_URL: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+    steps:
+      # 1. Checkout code
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Set up Node.js
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm' # Cache npm dependencies
+
+      # 3. Install system dependencies (only if needed)
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+        if: env.RECORD_VIDEO == 'true'
+
+      # 4. Install project dependencies
+      - name: Install dependencies
+        run: npm ci # Installs dependencies from package-lock.json
+
+      # 5. Install Chromium for Puppeteer
+      - name: Install Chromium
+        run: npx puppeteer browsers install chrome@stable
+
+      # 6. Run renewal script
+      - name: Run renewal script
+        run: node main.mjs
+        env:
+          RECORD_VIDEO: ${{ vars.RECORD_VIDEO || 'false' }}
+
+      # 7. Upload artifacts
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: puppeteer-output
+          path: |
+            renewal.log
+            *.png
+            *.webm
+            *.html
+          retention-days: 7
+
+      # 8. Notify on failure
+      - name: Notify on failure
+        if: failure()
+        run: |
+          curl -X POST -H "Content-Type: application/x-www-form-urlencoded" \
+            -d "title=Xserver VPS 续期失败 ❌&desp=工作流失败，查看详情：${{ env.GITHUB_RUN_URL }}" \
+            https://sctapi.ftqq.com/${{ secrets.SCKEY_SENDKEY }}.send
