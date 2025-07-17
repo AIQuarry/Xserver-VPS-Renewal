@@ -1,7 +1,6 @@
 import puppeteer from 'puppeteer'
 import { setTimeout } from 'node:timers/promises'
 import fs from 'fs'
-import fetch from 'node-fetch'
 import FormData from 'form-data'
 
 const MAX_RETRIES = 2
