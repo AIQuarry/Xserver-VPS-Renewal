@@ -32,10 +32,7 @@ async function uploadToChevereto(filePath) {
 async function sendServerNotify(title, message) {
     await fetch(`https://sctapi.ftqq.com/${process.env.SCKEY_SENDKEY}.send`, {
         method: 'POST',
-        body: new URLSearchParams({
-            title,
-            desp: message,
-        })
+        body: new URLSearchParams({ title, desp: message })
     })
 }
 
@@ -52,14 +49,14 @@ async function renewAttempt(attempt = 1) {
     try {
         console.log(`🔁 第 ${attempt} 次尝试`)
         await page.goto('https://secure.xserver.ne.jp/xapanel/login/xvps/', { waitUntil: 'networkidle2' })
-        await page.type('#memberid', process.env.EMAIL)
-        await page.type('#user_password', process.env.PASSWORD)
-        await page.click('text=ログインする')
+        await page.locator('#memberid').fill(process.env.EMAIL)
+        await page.locator('#user_password').fill(process.env.PASSWORD)
+        await page.locator('text=ログインする').click()
         await page.waitForNavigation({ waitUntil: 'networkidle2' })
 
-        await page.click('a[href^="/xapanel/xvps/server/detail?id="]')
-        await page.click('text=更新する')
-        await page.click('text=引き続き無料VPSの利用を継続する')
+        await page.locator('a[href^="/xapanel/xvps/server/detail?id="]').click()
+        await page.locator('text=更新する').click()
+        await page.locator('text=引き続き無料VPSの利用を継続する').click()
         await page.waitForNavigation({ waitUntil: 'networkidle2' })
 
         const captchaImg = await page.$('img[src^="data:"]')
@@ -87,11 +84,11 @@ async function renewAttempt(attempt = 1) {
                 }, 5000)
             })
 
-            await page.type('[placeholder="上の画像の数字を入力"]', code)
-            await page.click('text=無料VPSの利用を継続する')
+            await page.locator('[placeholder="上の画像の数字を入力"]').fill(code)
+            await page.locator('text=無料VPSの利用を継続する').click()
         } else {
             console.log('✅ 未检测到验证码，直接点击续期按钮')
-            await page.click('text=無料VPSの利用を継続する')
+            await page.locator('text=無料VPSの利用を継続する').click()
         }
 
         await page.waitForTimeout(3000)
@@ -135,5 +132,5 @@ async function renewAttempt(attempt = 1) {
     }
 }
 
-// 启动脚本
+// 🔧 启动脚本
 await renewAttempt()
