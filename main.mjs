@@ -1,39 +1,30 @@
 import puppeteer from 'puppeteer'
 import { setTimeout } from 'node:timers/promises'
-import fs from 'fs'
+// fs 模块不再需要，已移除
 import FormData from 'form-data'
 import { Buffer } from 'buffer'
 
 const MAX_RETRIES = 2
 
 /**
- * 将图片上传到 Chevereto
- * @param {string} source - 图片来源，可以是文件路径或 Base64 编码的字符串
- * @param {'file' | 'base64'} type - 指定来源类型
+ * 上传函数（仅限 Base64）
+ * @param {string} base64String - 图片的 Base64 编码字符串
  * @returns {Promise<string|null>} 成功则返回图片 URL，否则返回 null
  */
-async function uploadToChevereto(source, type) {
+async function uploadToChevereto(base64String) {
+    if (!base64String) {
+        console.error('❌ 上传失败：传入的 Base64 数据为空。');
+        return null;
+    }
+
     const form = new FormData()
     form.append('format', 'json')
 
-    console.log(`🚀 准备上传，类型: ${type}`)
+    console.log('🚀 准备上传 Base64 数据...')
 
-    if (type === 'file') {
-        // --- 二进制文件上传配置 ---
-        if (!fs.existsSync(source)) {
-            console.error(`❌ 文件不存在: ${source}`)
-            return null
-        }
-        form.append('source', fs.createReadStream(source))
-    } else if (type === 'base64') {
-        // --- Base64 数据上传配置 ---
-        const buffer = Buffer.from(source, 'base64');
-        // 附加 Buffer 时，必须提供一个文件名，以便API识别文件类型
-        form.append('source', buffer, { filename: 'screenshot.png' });
-    } else {
-        console.error(`❌ 无效的上传类型: ${type}`)
-        return null
-    }
+    const buffer = Buffer.from(base64String, 'base64');
+    // 附加 Buffer 时，必须提供一个文件名，以便API识别文件类型
+    form.append('source', buffer, { filename: 'screenshot.png' });
 
     try {
         const response = await fetch('https://img.piacg.eu.org/api/1/upload', {
@@ -65,6 +56,10 @@ async function uploadToChevereto(source, type) {
  * @param {string} message - 通知内容 (支持 Markdown)
  */
 async function sendServerNotify(title, message) {
+    if (!process.env.SCKEY_SENDKEY) {
+        console.log('🟡 未配置 SCKEY_SENDKEY，跳过发送通知。');
+        return;
+    }
     await fetch(`https://sctapi.ftqq.com/${process.env.SCKEY_SENDKEY}.send`, {
         method: 'POST',
         body: new URLSearchParams({
@@ -116,23 +111,26 @@ async function renewAttempt(attempt = 1) {
             }).then(res => res.json()).then(json => json.request)
 
             console.log(`⏳ 等待验证码识别结果, ID: ${captchaId}`)
-            const code = await new Promise((resolve) => {
-                const interval = setInterval(async () => {
-                    const result = await fetch(`http://2captcha.com/res.php?key=${process.env.CAPTCHA_API_KEY}&action=get&id=${captchaId}&json=1`)
-                        .then(res => res.json())
-                    if (result.status === 1) {
-                        clearInterval(interval)
-                        resolve(result.request)
-                    } else if (result.request !== 'CAPCHA_NOT_READY') {
-                         clearInterval(interval)
-                         console.error('❌ 验证码识别失败:', result.request)
-                         resolve(null)
-                    }
-                }, 5000)
-            })
-            
-            if (!code) throw new Error('验证码识别失败或超时。');
+            const code = await new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                    clearInterval(interval);
+                    reject(new Error('验证码识别超时 (90秒)'));
+                }, 90000);
 
+                const interval = setInterval(async () => {
+                    const result = await fetch(`http://2captcha.com/res.php?key=${process.env.CAPTCHA_API_KEY}&action=get&id=${captchaId}&json=1`).then(res => res.json());
+                    if (result.status === 1) {
+                        clearTimeout(timeout);
+                        clearInterval(interval);
+                        resolve(result.request);
+                    } else if (result.request !== 'CAPCHA_NOT_READY') {
+                        clearTimeout(timeout);
+                        clearInterval(interval);
+                        reject(new Error(`验证码识别失败: ${result.request}`));
+                    }
+                }, 5000);
+            });
+            
             console.log(`✅ 验证码识别成功: ${code}`)
             await page.type('[placeholder="上の画像の数字を入力"]', code)
             await page.click('text=無料VPSの利用を継続する')
@@ -143,10 +141,9 @@ async function renewAttempt(attempt = 1) {
 
         await page.waitForTimeout(3000)
         
-        // 成功时：直接截取 Base64 数据进行上传，不产生本地文件
-        console.log('📸 正在截取页面并直接上传 Base64 数据...')
+        console.log('📸 正在截取成功页面...')
         const screenshotBase64 = await page.screenshot({ encoding: 'base64' })
-        const imageUrl = await uploadToChevereto(screenshotBase64, 'base64')
+        const imageUrl = await uploadToChevereto(screenshotBase64)
 
         let msg = 'XServer VPS 自动续期成功 ✅\n\n'
         if (imageUrl) {
@@ -157,39 +154,45 @@ async function renewAttempt(attempt = 1) {
         console.log('🎉 成功！')
 
     } catch (e) {
-        console.error('❌ 失败：', e)
-        // 失败时：保存截图文件到本地，再用二进制文件方式上传，便于调试
-        const screenshotPath = './error.png'
-        await page.screenshot({ path: screenshotPath })
-        const imageUrl = await uploadToChevereto(screenshotPath, 'file')
+        console.error('❌ 主流程发生严重错误:', e)
+        let imageUrl = null;
 
-        // 上传后删除本地的错误截图
-        if (fs.existsSync(screenshotPath)) {
-            fs.unlinkSync(screenshotPath)
+        try {
+            console.log('📸 尝试截取错误快照 (Base64)...');
+            // 即使主流程失败，也尝试生成 Base64 截图并上传
+            const errorScreenshotBase64 = await page.screenshot({ encoding: 'base64' });
+            imageUrl = await uploadToChevereto(errorScreenshotBase64);
+        } catch (screenshotError) {
+            console.error('❌ 截取错误快照失败！可能是浏览器已崩溃:', screenshotError);
         }
 
-        let msg = `脚本执行失败：\n\n\`\`\`\n${e.message || e.toString()}\n\`\`\`\n`
+        let msg = `脚本执行失败：\n\n**主错误信息:**\n\`\`\`\n${e.message || e.toString()}\n\`\`\`\n`
         if (imageUrl) {
             msg += `\n![错误截图](${imageUrl})\n[查看原图](${imageUrl})`
+        } else {
+            msg += "\n错误截图上传失败，请检查运行日志。"
         }
 
         await sendServerNotify(`XServer VPS 第${attempt}次失败 ❌`, msg)
 
         if (attempt < MAX_RETRIES) {
             console.log('⏳ 重试中...')
-            await browser.close()
-            await renewAttempt(attempt + 1)
-            return
         } else {
             console.log('🚫 达到最大重试次数，终止')
         }
+        
+        if (attempt < MAX_RETRIES) {
+            await browser.close()
+            await renewAttempt(attempt + 1)
+        }
 
     } finally {
-        await setTimeout(3000)
-        await browser.close()
+        if (browser && browser.process() != null) {
+             await browser.close();
+             console.log('🚪 浏览器已关闭。');
+        }
     }
 }
 
 // 启动脚本
 await renewAttempt()
-
