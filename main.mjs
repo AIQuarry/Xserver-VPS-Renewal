@@ -1,7 +1,6 @@
 // main.mjs
 import puppeteer from 'puppeteer';
 import process from 'node:process';
-import fetch from 'node-fetch';
 import fs from 'node:fs/promises';
 
 const EMAIL = process.env.EMAIL;
