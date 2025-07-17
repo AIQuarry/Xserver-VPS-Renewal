@@ -5,8 +5,8 @@ import path from 'path'
 import { setTimeout } from 'node:timers/promises'
 
 const MAX_RETRIES = 2
-const SCREENSHOT_DIR = './screenshots'
-const RECORDING_PATH = './recording.webm'
+const SCREENSHOT_DIR = './'
+const RECORDING_PATH = 'recording.webm'
 
 if (!fs.existsSync(SCREENSHOT_DIR)) {
     fs.mkdirSync(SCREENSHOT_DIR)
