@@ -21,7 +21,7 @@ jobs:
       - run: sudo apt-get -qq update && sudo apt-get -yqq install --no-install-recommends ffmpeg fonts-noto-cjk
       - run: yarn add puppeteer
       - run: yarn add form-data
-      - run: yarn add buffer
+      - run: yarn add puppeteer-screen-recorder
       - run: node main.mjs
       - name: 上传截图
         uses: actions/upload-artifact@v4
