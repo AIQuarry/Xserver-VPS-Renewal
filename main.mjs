@@ -7,7 +7,7 @@ const MAX_RETRIES = 2
 
 async function uploadToChevereto(filePath) {
     const form = new FormData()
-    form.append('key', 'chv_f0i_0d74abac3e3526ebade63f275b49c6471d026a442b1ceae43bd3a80792a346b3f567e64e11e07624cdb17a1398938c753814e3c8744337bb6bcfe8202d9f57d1')
+    form.append('key', process.env.CHEVERETO_API_KEY)  // 使用环境变量
     form.append('format', 'json')
     form.append('source', fs.createReadStream(filePath))
 
