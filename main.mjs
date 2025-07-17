@@ -1,6 +1,5 @@
 import puppeteer from 'puppeteer'
 import { setTimeout } from 'node:timers/promises'
-import fetch from 'node-fetch'
 
 const args = ['--no-sandbox', '--disable-setuid-sandbox']
 const proxy = process.env.PROXY_SERVER
