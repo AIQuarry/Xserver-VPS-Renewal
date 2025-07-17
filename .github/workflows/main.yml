@@ -30,4 +30,4 @@ jobs:
           path:
              recording.webm
             ./screenshots/success.png
-            ./screenshots/error-${timestamp}.png
+            ./screenshots/error-*.png
