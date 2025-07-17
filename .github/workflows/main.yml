@@ -22,6 +22,10 @@ jobs:
       - run: yarn add puppeteer
       - run: yarn add form-data
       - run: node main.mjs
-      - uses: actions/upload-artifact@v4
+      - name: 上传截图
+        uses: actions/upload-artifact@v4
         with:
-          path: recording.webm
+          name: screenshot
+          path: |
+            success.png
+            error.png
