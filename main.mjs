@@ -6,7 +6,7 @@ import fetch from 'node-fetch'
 async function testUpload() {
   const browser = await puppeteer.launch()
   const page = await browser.newPage()
-  await page.goto('https://example.com')
+  await page.goto('https://x.com')
   const base64 = await page.screenshot({ encoding: 'base64' })
   console.log('截图长度', base64.length)
 
