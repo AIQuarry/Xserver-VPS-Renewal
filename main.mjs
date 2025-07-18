@@ -1,125 +1,105 @@
-import puppeteer from 'puppeteer'
-import { setTimeout } from 'node:timers/promises'
+import puppeteer from 'puppeteer';
+import { setTimeout } from 'node:timers/promises';
+import TwoCaptcha from '2captcha'; // 导入 2Captcha 库
+import 'dotenv/config'; // 加载环境变量
 
-// 2Captcha API解决函数
-async function solveTurnstile(page) {
-    const TWO_CAPTCHA_API_KEY = process.env.TWO_CAPTCHA_API_KEY;
-    if (!TWO_CAPTCHA_API_KEY) throw new Error('缺少2CAPTCHA_API_KEY环境变量');
-    
-    // 提取验证信息
-    const sitekey = await page.$eval(
-        'iframe[src*="challenges.cloudflare.com"]', 
-        iframe => iframe.getAttribute('data-sitekey')
-    );
-    const pageUrl = page.url();
+// 初始化 2Captcha 解决器
+const solver = new TwoCaptcha.Solver(process.env.TWOCAPTCHA_KEY);
 
-    // 发送请求到2Captcha
-    const submitResponse = await fetch('https://2captcha.com/in.php', {
-        method: 'POST',
-        body: new URLSearchParams({
-            key: TWO_CAPTCHA_API_KEY,
-            method: 'turnstile',
-            sitekey: sitekey,
-            pageurl: pageUrl,
-            json: '1'
-        })
-    });
-    const submitData = await submitResponse.json();
-
-    if (submitData.status !== 1) throw new Error('2Captcha提交失败: ' + submitData.request);
-    const captchaId = submitData.request;
-
-    // 轮询获取结果（最长等待2分钟）
-    for (let i = 0; i < 24; i++) {
-        await setTimeout(5000);
-        const resultResponse = await fetch(
-            `https://2captcha.com/res.php?key=${TWO_CAPTCHA_API_KEY}&action=get&id=${captchaId}&json=1`
-        );
-        const resultData = await resultResponse.json();
-
-        if (resultData.status === 1) return resultData.request; // 返回token
-        if (resultData.request !== 'CAPCHA_NOT_READY') throw new Error('2Captcha错误: ' + resultData.request);
-    }
-    throw new Error('2Captcha超时');
-}
-
-const args = ['--no-sandbox', '--disable-setuid-sandbox']
+// 配置 Puppeteer 启动参数
+const args = ['--no-sandbox', '--disable-setuid-sandbox'];
 if (process.env.PROXY_SERVER) {
-    const proxy_url = new URL(process.env.PROXY_SERVER)
-    proxy_url.username = ''
-    proxy_url.password = ''
-    args.push(`--proxy-server=${proxy_url}`.replace(/\/$/, ''))
+    const proxy_url = new URL(process.env.PROXY_SERVER);
+    proxy_url.username = '';
+    proxy_url.password = '';
+    args.push(`--proxy-server=${proxy_url}`.replace(/\/$/, ''));
 }
 
 const browser = await puppeteer.launch({
     defaultViewport: { width: 1080, height: 1024 },
     args,
-})
-const [page] = await browser.pages()
-const userAgent = await browser.userAgent()
-await page.setUserAgent(userAgent.replace('Headless', ''))
-const recorder = await page.screencast({ path: 'recording.webm' })
+});
+const [page] = await browser.pages();
+const userAgent = await browser.userAgent();
+await page.setUserAgent(userAgent.replace('Headless', '')); // 移除 Headless 标识以模拟真实浏览器
+const recorder = await page.screencast({ path: 'recording.webm' }); // 录制屏幕
 
 try {
+    // 代理身份验证（如果有）
     if (process.env.PROXY_SERVER) {
-        const { username, password } = new URL(process.env.PROXY_SERVER)
+        const { username, password } = new URL(process.env.PROXY_SERVER);
         if (username && password) {
-            await page.authenticate({ username, password })
+            await page.authenticate({ username, password });
         }
     }
 
-    await page.goto('https://secure.xserver.ne.jp/xapanel/login/xvps/', { 
-        waitUntil: 'networkidle2',
-        timeout: 60000
-    })
-    await page.locator('#memberid').fill(process.env.EMAIL)
-    await page.locator('#user_password').fill(process.env.PASSWORD)
-    await page.locator('text=ログインする').click()
-    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 })
-    await page.locator('a[href^="/xapanel/xvps/server/detail?id="]').click()
-    await page.locator('text=更新する').click()
-    await page.locator('text=引き続き無料VPSの利用を継続する').click()
-    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 })
-    
-    // 处理图片验证码
-    await page.waitForSelector('img[src^="data:"]', { timeout: 10000 })
-    const body = await page.$eval('img[src^="data:"]', img => img.src)
-    const code = await fetch('https://captcha-120546510085.asia-northeast1.run.app', { 
-        method: 'POST', 
-        body 
-    }).then(r => r.text())
-    await page.locator('[placeholder="上の画像の数字を入力"]').fill(code)
-    
-    // 新增：处理Cloudflare Turnstile验证
-    const token = await solveTurnstile(page);
-    await page.evaluate((token) => {
-        // 尝试在父页面设置
-        const textarea = document.querySelector('textarea[name="cf-turnstile-response"]');
-        if (textarea) {
-            textarea.value = token;
-            return;
+    // 访问登录页面并等待网络空闲
+    await page.goto('https://secure.xserver.ne.jp/xapanel/login/xvps/', { waitUntil: 'networkidle2' });
+    // 填写用户名和密码
+    await page.locator('#memberid').fill(process.env.EMAIL);
+    await page.locator('#user_password').fill(process.env.PASSWORD);
+    // 点击“登录”按钮
+    await page.locator('text=ログインする').click();
+    await page.waitForNavigation({ waitUntil: 'networkidle2' });
+    // 点击 VPS 详情链接
+    await page.locator('a[href^="/xapanel/xvps/server/detail?id="]').click();
+    // 点击“更新”按钮
+    await page.locator('text=更新する').click();
+    // 点击“继续使用免费 VPS”按钮
+    await page.locator('text=引き続き無料VPSの利用を継続する').click();
+    await page.waitForNavigation({ waitUntil: 'networkidle2' });
+    // 获取图像验证码的 base64 数据
+    const body = await page.$eval('img[src^="data:"]', img => img.src);
+    // 通过外部服务解析图像验证码
+    const code = await fetch('https://captcha-120546510085.asia-northeast1.run.app', { method: 'POST', body }).then(r => r.text());
+    // 填写图像验证码
+    await page.locator('[placeholder="上の画像の数字を入力"]').fill(code);
+
+    // 检查 Cloudflare Turnstile 挑战
+    const turnstileIframe = await page.$('#cf-chl-widget-x0421'); // 使用 iframe 的 ID
+    if (turnstileIframe) {
+        console.log('检测到 Cloudflare Turnstile 挑战，调用 2Captcha 解决...');
+
+        // 从 iframe 的 src 中提取 sitekey
+        const iframeSrc = await turnstileIframe.evaluate(el => el.getAttribute('src'));
+        const sitekeyMatch = iframeSrc.match(/0x4[A-Za-z0-9]+/); // 从 src 中提取 sitekey
+        const sitekey = sitekeyMatch ? sitekeyMatch[0] : null;
+        if (!sitekey) {
+            throw new Error('无法从 iframe src 中提取 sitekey');
         }
-        
-        // 如果在框架内
-        const iframe = document.querySelector('iframe[src*="challenges.cloudflare.com"]');
-        if (iframe && iframe.contentDocument) {
-            const iframeTextarea = iframe.contentDocument.querySelector('textarea[name="cf-turnstile-response"]');
-            if (iframeTextarea) iframeTextarea.value = token;
-        }
-    }, token);
-    
-    // 等待验证状态更新
-    await setTimeout(2000);
-    
-    // 点击继续按钮
-    await page.locator('text=無料VPSの利用を継続する').click()
-    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 })
+
+        const pageUrl = page.url();
+
+        // 使用 2Captcha 解决 Turnstile 挑战
+        const res = await solver.turnstile({
+            pageurl: pageUrl,
+            sitekey: sitekey,
+        });
+        const token = res.data;
+
+        // 注入令牌到隐藏输入字段
+        await page.evaluate((token) => {
+            const input = document.querySelector('input[name="cf-turnstile-response"]');
+            if (input) {
+                input.value = token;
+            } else {
+                throw new Error('未找到 cf-turnstile-response 输入字段');
+            }
+        }, token);
+
+        console.log('Turnstile 挑战已解决并注入令牌');
+    } else {
+        console.log('未检测到 Turnstile 挑战，继续执行...');
+    }
+
+    // 执行最后一步：点击“继续使用免费 VPS”按钮
+    await page.locator('text=無料VPSの利用を継続する').click();
+    console.log('成功点击“無料VPSの利用を継続する”');
 } catch (e) {
-    console.error('流程出错:', e)
-    // 保存错误截图
-    await page.screenshot({ path: 'error.png', fullPage: true })
+    console.error('发生错误：', e);
 } finally {
-    await setTimeout(5000)
-    await recorder.stop()
-    await browser.close()
+    // 等待 5 秒后停止录制并关闭浏览器
+    await setTimeout(5000);
+    await recorder.stop();
+    await browser.close();
 }
