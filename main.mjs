@@ -1,149 +1,48 @@
 import puppeteer from 'puppeteer'
-import { PuppeteerScreenRecorder } from 'puppeteer-screen-recorder'
-import fs from 'fs'
-import path from 'path'
 import { setTimeout } from 'node:timers/promises'
 
-const MAX_RETRIES = 2
-const SCREENSHOT_DIR = './'
-const RECORDING_PATH = 'recording.webm'
-
-// 创建截图目录
-if (!fs.existsSync(SCREENSHOT_DIR)) {
-    fs.mkdirSync(SCREENSHOT_DIR)
+const args = ['--no-sandbox', '--disable-setuid-sandbox']
+if (process.env.PROXY_SERVER) {
+    const proxy_url = new URL(process.env.PROXY_SERVER)
+    proxy_url.username = ''
+    proxy_url.password = ''
+    args.push(`--proxy-server=${proxy_url}`.replace(/\/$/, ''))
 }
 
-async function sendServerNotify(title, message) {
-    await fetch(`https://sctapi.ftqq.com/${process.env.SCKEY_SENDKEY}.send`, {
-        method: 'POST',
-        body: new URLSearchParams({ title, desp: message }),
-    })
-}
+const browser = await puppeteer.launch({
+    defaultViewport: { width: 1080, height: 1024 },
+    args,
+})
+const [page] = await browser.pages()
+const userAgent = await browser.userAgent()
+await page.setUserAgent(userAgent.replace('Headless', ''))
+const recorder = await page.screencast({ path: 'recording.webm' })
 
-async function renewAttempt(attempt = 1) {
-    const browser = await puppeteer.launch({
-        defaultViewport: { width: 1080, height: 1024 },
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    })
-
-    const [page] = await browser.pages()
-    const userAgent = await browser.userAgent()
-    await page.setUserAgent(userAgent.replace('Headless', ''))
-
-    const recorder = new PuppeteerScreenRecorder(page, {
-        followNewTab: true,
-        fps: 25,
-        videoFrame: { width: 1080, height: 1024 },
-        aspectRatio: '4:3',
-    })
-
-    try {
-        console.log(`🔁 第 ${attempt} 次尝试`)
-        await recorder.start(RECORDING_PATH)
-
-        await page.goto('https://secure.xserver.ne.jp/xapanel/login/xvps/', { waitUntil: 'networkidle2' })
-        await setTimeout(2000) // 稳定等待
-
-        await page.type('#memberid', process.env.EMAIL)
-        await page.type('#user_password', process.env.PASSWORD)
-
-        // 点击登录，同时等待导航完成
-        await Promise.all([
-            page.waitForNavigation({ waitUntil: 'networkidle2' }),
-            page.click('text=ログインする'),
-        ])
-        await setTimeout(1000)
-
-        await page.click('a[href^="/xapanel/xvps/server/detail?id="]')
-        await setTimeout(1000)
-
-        await page.click('text=更新する')
-        await setTimeout(1000)
-
-        // 点击续期按钮，同时等待导航
-        await Promise.all([
-            page.waitForNavigation({ waitUntil: 'networkidle2' }),
-            page.click('text=引き続き無料VPSの利用を継続する'),
-        ])
-        await setTimeout(1000)
-
-        const captchaImg = await page.$('img[src^="data:"]')
-        if (captchaImg) {
-            console.log('🔎 发现验证码，开始识别...')
-            const imgBase64 = await page.$eval('img[src^="data:"]', (img) => img.src.split(',')[1])
-
-            const captchaId = await fetch('http://2captcha.com/in.php', {
-                method: 'POST',
-                body: new URLSearchParams({
-                    method: 'base64',
-                    key: process.env.CAPTCHA_API_KEY,
-                    body: imgBase64,
-                    json: '1',
-                }),
-            })
-                .then((res) => res.json())
-                .then((json) => json.request)
-
-            console.log(`⏳ 等待验证码识别结果, ID: ${captchaId}`)
-            const code = await new Promise((resolve) => {
-                const interval = setInterval(async () => {
-                    const result = await fetch(
-                        `http://2captcha.com/res.php?key=${process.env.CAPTCHA_API_KEY}&action=get&id=${captchaId}&json=1`
-                    ).then((res) => res.json())
-                    if (result.status === 1) {
-                        clearInterval(interval)
-                        resolve(result.request)
-                    } else if (result.request !== 'CAPCHA_NOT_READY') {
-                        clearInterval(interval)
-                        console.error('❌ 验证码识别失败:', result.request)
-                        resolve(null)
-                    }
-                }, 5000)
-            })
-
-            if (!code) throw new Error('验证码识别失败或超时。')
-
-            console.log(`✅ 验证码识别成功: ${code}`)
-            await page.type('[placeholder="上の画像の数字を入力"]', code)
-            await page.click('text=無料VPSの利用を継続する')
-        } else {
-            console.log('✅ 未检测到验证码，直接点击续期按钮')
-            await page.click('text=無料VPSの利用を継続する')
+try {
+    if (process.env.PROXY_SERVER) {
+        const { username, password } = new URL(process.env.PROXY_SERVER)
+        if (username && password) {
+            await page.authenticate({ username, password })
         }
-
-        await page.waitForTimeout(3000)
-
-        // 截图保存
-        const successPath = path.join(SCREENSHOT_DIR, 'success.png')
-        await page.screenshot({ path: successPath })
-
-        await sendServerNotify('XServer VPS 自动续期成功 ✅', `本次续期成功，截图保存在：\`${successPath}\`，录屏文件：\`${RECORDING_PATH}\``)
-        console.log('🎉 成功！')
-    } catch (e) {
-        console.error('❌ 失败：', e)
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-        const screenshotPath = path.join(SCREENSHOT_DIR, `error-${timestamp}.png`)
-        await page.screenshot({ path: screenshotPath })
-
-        await sendServerNotify(`XServer VPS 第${attempt}次失败 ❌`,
-            `错误信息：\n\n\`\`\`\n${e.message || e.toString()}\n\`\`\`\n截图：\`${screenshotPath}\`\n录屏文件：\`${RECORDING_PATH}\``)
-
-        if (attempt < MAX_RETRIES) {
-            console.log('⏳ 重试中... 等待5秒后重试')
-            await setTimeout(5000)
-            await recorder.stop()
-            await browser.close()
-            await renewAttempt(attempt + 1)
-            return
-        } else {
-            console.log('🚫 达到最大重试次数，终止')
-        }
-    } finally {
-        await recorder.stop()
-        await setTimeout(3000)
-        await browser.close()
     }
-}
 
-// 启动脚本
-await renewAttempt()
+    await page.goto('https://secure.xserver.ne.jp/xapanel/login/xvps/', { waitUntil: 'networkidle2' })
+    await page.locator('#memberid').fill(process.env.EMAIL)
+    await page.locator('#user_password').fill(process.env.PASSWORD)
+    await page.locator('text=ログインする').click()
+    await page.waitForNavigation({ waitUntil: 'networkidle2' })
+    await page.locator('a[href^="/xapanel/xvps/server/detail?id="]').click()
+    await page.locator('text=更新する').click()
+    await page.locator('text=引き続き無料VPSの利用を継続する').click()
+    await page.waitForNavigation({ waitUntil: 'networkidle2' })
+    const body = await page.$eval('img[src^="data:"]', img => img.src)
+    const code = await fetch('https://captcha-120546510085.asia-northeast1.run.app', { method: 'POST', body }).then(r => r.text())
+    await page.locator('[placeholder="上の画像の数字を入力"]').fill(code)
+    await page.locator('text=無料VPSの利用を継続する').click()
+} catch (e) {
+    console.error(e)
+} finally {
+    await setTimeout(5000)
+    await recorder.stop()
+    await browser.close()
+}
