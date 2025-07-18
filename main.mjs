@@ -1,6 +1,7 @@
 import puppeteer from 'puppeteer';
 import { setTimeout } from 'node:timers/promises';
-import TwoCaptcha from '2captcha'; 
+import TwoCaptcha from '2captcha';
+import 'dotenv/config';
 
 // 初始化 2Captcha 解决器
 const solver = new TwoCaptcha.Solver(process.env.TWOCAPTCHA_KEY);
@@ -20,7 +21,7 @@ const browser = await puppeteer.launch({
 });
 const [page] = await browser.pages();
 const userAgent = await browser.userAgent();
-await page.setUserAgent(userAgent.replace('Headless', '')); // 移除 Headless 标识以模拟真实浏览器
+await page.setUserAgent(userAgent.replace('Headless', '')); // 移除 Headless 标识
 const recorder = await page.screencast({ path: 'recording.webm' }); // 录制屏幕
 
 try {
@@ -34,35 +35,33 @@ try {
 
     // 访问登录页面并等待网络空闲
     await page.goto('https://secure.xserver.ne.jp/xapanel/login/xvps/', { waitUntil: 'networkidle2' });
-    // 填写用户名和密码
     await page.locator('#memberid').fill(process.env.EMAIL);
     await page.locator('#user_password').fill(process.env.PASSWORD);
-    // 点击“登录”按钮
     await page.locator('text=ログインする').click();
     await page.waitForNavigation({ waitUntil: 'networkidle2' });
-    // 点击 VPS 详情链接
     await page.locator('a[href^="/xapanel/xvps/server/detail?id="]').click();
-    // 点击“更新”按钮
     await page.locator('text=更新する').click();
-    // 点击“继续使用免费 VPS”按钮
     await page.locator('text=引き続き無料VPSの利用を継続する').click();
     await page.waitForNavigation({ waitUntil: 'networkidle2' });
-    // 获取图像验证码的 base64 数据
+    // 获取并提交图像验证码
     const body = await page.$eval('img[src^="data:"]', img => img.src);
-    // 通过外部服务解析图像验证码
     const code = await fetch('https://captcha-120546510085.asia-northeast1.run.app', { method: 'POST', body }).then(r => r.text());
-    // 填写图像验证码
-    await page.locator('[placeholder="上の画像の数字を入力"]').fill(code);
+    await page.locator('[placeholder="上の画像的数字を入力"]').fill(code);
+    await page.waitForTimeout(5000); // 等待 5 秒以确保页面加载
 
     // 检查 Cloudflare Turnstile 挑战
-    const turnstileIframe = await page.$('#cf-chl-widget-x0421'); // 使用 iframe 的 ID
-    if (turnstileIframe) {
-        console.log('检测到 Cloudflare Turnstile 挑战，调用 2Captcha 解决...');
+    const turnstileCheckbox = await page.$('input[type="checkbox"]');
+    if (turnstileCheckbox) {
+        console.log('检测到 Turnstile 复选框，调用 2Captcha 解决...');
 
-        // 从 iframe 的 src 中提取 sitekey
-        const iframeSrc = await turnstileIframe.evaluate(el => el.getAttribute('src'));
-        const sitekeyMatch = iframeSrc.match(/0x4[A-Za-z0-9]+/); // 从 src 中提取 sitekey
-        const sitekey = sitekeyMatch ? sitekeyMatch[0] : null;
+        // 从页面中提取 sitekey（可能需要从脚本或 iframe 中获取）
+        const iframe = await page.$('#cf-chl-widget-x0421');
+        let sitekey = null;
+        if (iframe) {
+            const iframeSrc = await iframe.evaluate(el => el.getAttribute('src'));
+            const sitekeyMatch = iframeSrc.match(/0x4[A-Za-z0-9]+/);
+            sitekey = sitekeyMatch ? sitekeyMatch[0] : null;
+        }
         if (!sitekey) {
             throw new Error('无法从 iframe src 中提取 sitekey');
         }
@@ -75,6 +74,7 @@ try {
             sitekey: sitekey,
         });
         const token = res.data;
+        console.log('2Captcha 返回的令牌：', token);
 
         // 注入令牌到隐藏输入字段
         await page.evaluate((token) => {
@@ -86,18 +86,39 @@ try {
             }
         }, token);
 
-        console.log('Turnstile 挑战已解决并注入令牌');
+        // 模拟点击复选框（如果需要）
+        await turnstileCheckbox.click();
+        await page.waitForTimeout(5000); // 等待 5 秒以确保验证开始
+
+        // 等待验证成功状态
+        await page.waitForSelector('#success', { timeout: 10000 }).catch(() => {
+            console.log('未检测到验证成功状态，可能需要更多时间');
+        });
+        console.log('Turnstile 挑战已解决');
     } else {
-        console.log('未检测到 Turnstile 挑战，继续执行...');
+        console.log('未检测到 Turnstile 复选框，继续执行...');
     }
 
-    // 执行最后一步：点击“继续使用免费 VPS”按钮
-    await page.locator('text=無料VPSの利用を継続する').click();
-    console.log('成功点击“無料VPSの利用を継続する”');
+    // 等待目标按钮出现并确保可交互
+    await page.waitForSelector('text=無料VPSの利用を継続する', { timeout: 20000 }); // 延长到 20 秒
+    const button = await page.$('text=無料VPSの利用を継続する');
+    if (button) {
+        await button.click();
+        console.log('成功点击“無料VPSの利用を継続する”');
+    } else {
+        console.error('未找到“無料VPSの利用を継続する”按钮');
+        await page.screenshot({ path: 'error-screenshot.png' }); // 保存错误截图
+        throw new Error('目标按钮未找到');
+    }
+
+    // 等待导航完成（如果点击触发页面跳转）
+    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }).catch(() => {
+        console.log('未检测到导航，可能无需跳转');
+    });
 } catch (e) {
     console.error('发生错误：', e);
+    await page.screenshot({ path: 'error-screenshot.png' }); // 保存错误截图
 } finally {
-    // 等待 5 秒后停止录制并关闭浏览器
     await setTimeout(5000);
     await recorder.stop();
     await browser.close();
