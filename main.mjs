@@ -1,72 +1,6 @@
 import puppeteer from 'puppeteer'
 import { setTimeout } from 'node:timers/promises'
 
-// 改进的Cloudflare Turnstile验证解决函数
-async function solveTurnstile(page) {
-    const TWO_CAPTCHA_API_KEY = process.env.TWO_CAPTCHA_API_KEY;
-    if (!TWO_CAPTCHA_API_KEY) throw new Error('缺少2CAPTCHA_API_KEY环境变量');
-    
-    // 更可靠的选择器 - 尝试多种可能的选择器
-    const iframeSelector = [
-        'iframe[src*="challenges.cloudflare.com"]',
-        'iframe[title*="Cloudflare"]',
-        'iframe[data-sitekey]',
-        'iframe[title*="チャレンジ"]',
-        'iframe[title*="验证"]'
-    ].join(',');
-
-    // 等待验证框架出现（最多等待10秒）
-    try {
-        await page.waitForSelector(iframeSelector, { timeout: 10000 });
-    } catch (e) {
-        // 如果找不到iframe，可能是验证码未加载或不需要验证
-        console.warn('未找到Cloudflare验证框架，跳过验证处理');
-        return;
-    }
-
-    // 提取验证信息
-    const sitekey = await page.$eval(
-        iframeSelector, 
-        iframe => iframe.getAttribute('data-sitekey') || iframe.dataset.sitekey
-    );
-    
-    if (!sitekey) {
-        throw new Error('无法从iframe中提取sitekey');
-    }
-    
-    const pageUrl = page.url();
-
-    // 发送请求到2Captcha
-    const formData = new URLSearchParams();
-    formData.append('key', TWO_CAPTCHA_API_KEY);
-    formData.append('method', 'turnstile');
-    formData.append('sitekey', sitekey);
-    formData.append('pageurl', pageUrl);
-    formData.append('json', '1');
-
-    const submitResponse = await fetch('https://2captcha.com/in.php', {
-        method: 'POST',
-        body: formData
-    });
-    const submitData = await submitResponse.json();
-
-    if (submitData.status !== 1) throw new Error('2Captcha提交失败: ' + submitData.request);
-    const captchaId = submitData.request;
-
-    // 轮询获取结果（最长等待2分钟）
-    for (let i = 0; i < 24; i++) {
-        await setTimeout(5000);
-        const resultResponse = await fetch(
-            `https://2captcha.com/res.php?key=${TWO_CAPTCHA_API_KEY}&action=get&id=${captchaId}&json=1`
-        );
-        const resultData = await resultResponse.json();
-
-        if (resultData.status === 1) return resultData.request; // 返回token
-        if (resultData.request !== 'CAPCHA_NOT_READY') throw new Error('2Captcha错误: ' + resultData.request);
-    }
-    throw new Error('2Captcha超时');
-}
-
 const args = ['--no-sandbox', '--disable-setuid-sandbox']
 if (process.env.PROXY_SERVER) {
     const proxy_url = new URL(process.env.PROXY_SERVER)
@@ -111,45 +45,39 @@ try {
     const code = await fetch('https://captcha-120546510085.asia-northeast1.run.app', { method: 'POST', body }).then(r => r.text())
     await page.locator('[placeholder="上の画像の数字を入力"]').fill(code)
     
-    // 新增Cloudflare Turnstile验证处理
-    const token = await solveTurnstile(page);
+    // 新增：处理Cloudflare复选框验证
+    await page.waitForSelector('label.cb-lb', { timeout: 10000 });
     
-    if (token) {
-        await page.evaluate((token) => {
-            // 尝试在父页面设置
-            const textarea = document.querySelector('textarea[name="cf-turnstile-response"]');
-            if (textarea) {
-                textarea.value = token;
-                return;
-            }
+    // 确保复选框可见并启用
+    await page.evaluate(() => {
+        const label = document.querySelector('label.cb-lb');
+        if (label) {
+            // 确保标签可见
+            label.style.visibility = 'visible';
+            label.style.display = 'block';
+            label.style.opacity = '1';
             
-            // 如果在框架内
-            const iframes = document.querySelectorAll('iframe');
-            for (const iframe of iframes) {
-                try {
-                    const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
-                    const iframeTextarea = iframeDoc.querySelector('textarea[name="cf-turnstile-response"]');
-                    if (iframeTextarea) {
-                        iframeTextarea.value = token;
-                        return;
-                    }
-                } catch (e) {
-                    // 跨域iframe无法访问，跳过
-                }
+            // 确保复选框可点击
+            const checkbox = label.querySelector('input[type="checkbox"]');
+            if (checkbox) {
+                checkbox.disabled = false;
+                checkbox.style.pointerEvents = 'auto';
             }
-            
-            // 作为最后手段，尝试通过事件设置
-            const event = new Event('input', { bubbles: true });
-            const hiddenInput = document.querySelector('input[name="cf-turnstile-response"]');
-            if (hiddenInput) {
-                hiddenInput.value = token;
-                hiddenInput.dispatchEvent(event);
-            }
-        }, token);
-        
-        // 等待验证状态更新
-        await setTimeout(2000);
+        }
+    });
+    
+    // 点击复选框标签
+    await page.click('label.cb-lb');
+    
+    // 验证是否已勾选
+    const isChecked = await page.$eval('label.cb-lb input[type="checkbox"]', checkbox => checkbox.checked);
+    if (!isChecked) {
+        // 如果未勾选，尝试直接点击复选框
+        await page.click('label.cb-lb input[type="checkbox"]');
     }
+    
+    // 等待验证完成
+    await setTimeout(2000);
     
     // 继续原有流程
     await page.locator('text=無料VPSの利用を継続する').click()
