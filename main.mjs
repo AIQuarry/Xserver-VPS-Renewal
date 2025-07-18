@@ -45,42 +45,41 @@ try {
     const code = await fetch('https://captcha-120546510085.asia-northeast1.run.app', { method: 'POST', body }).then(r => r.text())
     await page.locator('[placeholder="上の画像の数字を入力"]').fill(code)
     
-    // 新增：处理Cloudflare复选框验证
-    await page.waitForSelector('label.cb-lb', { timeout: 10000 });
+    // 新增：使用文本定位处理Cloudflare复选框验证
+    // 更可靠的定位方式 - 使用文本内容
+    const checkboxSelector = 'text/人間であることを確認します';
     
-    // 确保复选框可见并启用
-    await page.evaluate(() => {
-        const label = document.querySelector('label.cb-lb');
-        if (label) {
-            // 确保标签可见
-            label.style.visibility = 'visible';
-            label.style.display = 'block';
-            label.style.opacity = '1';
-            
-            // 确保复选框可点击
-            const checkbox = label.querySelector('input[type="checkbox"]');
-            if (checkbox) {
-                checkbox.disabled = false;
-                checkbox.style.pointerEvents = 'auto';
+    try {
+        // 等待最多15秒
+        await page.waitForSelector(checkboxSelector, { timeout: 15000 });
+        
+        // 确保元素可见
+        await page.evaluate((selector) => {
+            const element = document.querySelector(selector);
+            if (element) {
+                element.scrollIntoView({ behavior: 'auto', block: 'center' });
             }
+        }, checkboxSelector);
+        
+        // 点击复选框
+        await page.click(checkboxSelector);
+        
+        // 验证是否已勾选
+        const isChecked = await page.$eval('input[type="checkbox"]', checkbox => checkbox.checked);
+        if (!isChecked) {
+            // 如果未勾选，尝试直接点击复选框
+            await page.click('input[type="checkbox"]');
         }
-    });
-    
-    // 点击复选框标签
-    await page.click('label.cb-lb');
-    
-    // 验证是否已勾选
-    const isChecked = await page.$eval('label.cb-lb input[type="checkbox"]', checkbox => checkbox.checked);
-    if (!isChecked) {
-        // 如果未勾选，尝试直接点击复选框
-        await page.click('label.cb-lb input[type="checkbox"]');
+    } catch (e) {
+        console.warn('未找到验证复选框，可能已自动验证:', e.message);
     }
     
     // 等待验证完成
-    await setTimeout(2000);
+    await setTimeout(3000);
     
     // 继续原有流程
     await page.locator('text=無料VPSの利用を継続する').click()
+    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 })
 } catch (e) {
     console.error(e)
 } finally {
