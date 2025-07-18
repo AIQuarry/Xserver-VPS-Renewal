@@ -1,10 +1,10 @@
-name: Xserver VPS Renew
-
 on:
   schedule:
-    - cron: '45 0 * * *'  # 日本时间 09:45
+    - cron: 0 7,15,23 * * *
+  push:
   workflow_dispatch:
 
+jobs:
 job:
     runs-on: ubuntu-latest
     timeout-minutes: 10
