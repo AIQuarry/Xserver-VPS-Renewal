@@ -1,13 +1,12 @@
-import puppeteer from 'puppeteer'
-import { setTimeout } from 'node:timers/promises'
-import puppeteerExtra from 'puppeteer-extra'
+import puppeteer from 'puppeteer-extra'
 import StealthPlugin from 'puppeteer-extra-plugin-stealth'
 import RecaptchaPlugin from 'puppeteer-extra-plugin-recaptcha'
+import { setTimeout } from 'node:timers/promises'
 import { executablePath } from 'puppeteer'
 
-// 使用增强版puppeteer并添加插件
-puppeteerExtra.use(StealthPlugin())
-puppeteerExtra.use(RecaptchaPlugin({
+// 应用插件
+puppeteer.use(StealthPlugin())
+puppeteer.use(RecaptchaPlugin({
   provider: {
     id: '2captcha',
     token: process.env.TWO_CAPTCHA_API_KEY
@@ -15,6 +14,7 @@ puppeteerExtra.use(RecaptchaPlugin({
   visualFeedback: true
 }))
 
+// 浏览器参数
 const args = [
   '--no-sandbox',
   '--disable-setuid-sandbox',
@@ -49,7 +49,6 @@ const args = [
   '--disable-print-preview',
   '--disable-prompt-on-repost',
   '--disable-renderer-backgrounding',
-  '--disable-setuid-sandbox',
   '--disable-sync',
   '--disable-translate',
   '--metrics-recording-only',
@@ -58,7 +57,8 @@ const args = [
   '--safebrowsing-disable-auto-update',
   '--password-store=basic',
   '--use-mock-keychain',
-  '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'
+  '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+  '--headless=new' // 关键：使用新的Headless模式
 ]
 
 // 添加代理设置
@@ -70,9 +70,9 @@ if (process.env.PROXY_SERVER) {
 }
 
 // 创建浏览器实例
-const browser = await puppeteerExtra.launch({
-  headless: false, // 必须使用非无头模式
-  defaultViewport: null, // 使用默认视口
+const browser = await puppeteer.launch({
+  headless: 'new', // 使用新的Headless模式
+  defaultViewport: { width: 1280, height: 800 },
   args,
   executablePath: executablePath(),
   ignoreHTTPSErrors: true
@@ -80,33 +80,23 @@ const browser = await puppeteerExtra.launch({
 
 const [page] = await browser.pages()
 
-// 隐藏WebDriver属性
+// 隐藏自动化痕迹
 await page.evaluateOnNewDocument(() => {
+  // 隐藏webdriver属性
   Object.defineProperty(navigator, 'webdriver', {
     get: () => false
   })
-})
-
-// 覆盖plugins属性
-await page.evaluateOnNewDocument(() => {
+  
+  // 覆盖plugins属性
   Object.defineProperty(navigator, 'plugins', {
     get: () => [1, 2, 3]
   })
-})
-
-// 覆盖languages属性
-await page.evaluateOnNewDocument(() => {
+  
+  // 覆盖languages属性
   Object.defineProperty(navigator, 'languages', {
-    get: () => ['en-US', 'en']
+    get: () => ['ja-JP', 'ja', 'en-US', 'en']
   })
 })
-
-// 设置合理的用户代理
-const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'
-await page.setUserAgent(userAgent)
-
-// 启动录屏
-const recorder = await page.screencast({ path: 'recording.webm' })
 
 try {
   // 代理认证
@@ -132,39 +122,36 @@ try {
   
   // 随机等待后点击登录
   await setTimeout(1000 + Math.random() * 2000)
-  await page.click('text=ログインする')
-  
-  // 等待导航完成
-  await page.waitForNavigation({ 
-    waitUntil: 'networkidle0',
-    timeout: 60000
-  })
+  const loginButton = await page.waitForSelector('text=ログインする', { timeout: 10000 })
+  await Promise.all([
+    loginButton.click(),
+    page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 })
+  ])
   
   // 查找服务器详情链接
   const serverLinks = await page.$$('a[href^="/xapanel/xvps/server/detail?id="]')
   if (serverLinks.length > 0) {
-    await serverLinks[0].click()
+    await Promise.all([
+      serverLinks[0].click(),
+      page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 })
+    ])
   } else {
     throw new Error('未找到服务器详情链接')
   }
   
-  // 等待页面加载
-  await page.waitForSelector('text=更新する', { timeout: 15000 })
-  
   // 点击更新按钮
-  await page.click('text=更新する')
-  
-  // 等待继续使用选项
-  await page.waitForSelector('text=引き続き無料VPSの利用を継続する', { timeout: 15000 })
+  const updateButton = await page.waitForSelector('text=更新する', { timeout: 15000 })
+  await Promise.all([
+    updateButton.click(),
+    page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 })
+  ])
   
   // 点击继续使用
-  await page.click('text=引き続き無料VPSの利用を継続する')
-  
-  // 等待验证页面加载
-  await page.waitForNavigation({ 
-    waitUntil: 'networkidle0',
-    timeout: 60000
-  })
+  const continueButton = await page.waitForSelector('text=引き続き無料VPSの利用を継続する', { timeout: 15000 })
+  await Promise.all([
+    continueButton.click(),
+    page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 })
+  ])
   
   // 处理图片验证码
   await page.waitForSelector('img[src^="data:"]', { timeout: 10000 })
@@ -194,20 +181,20 @@ try {
   }
   
   // 点击继续按钮
-  await page.click('text=無料VPSの利用を継続する')
-  
-  // 等待最终结果
-  await page.waitForNavigation({ 
-    waitUntil: 'networkidle0',
-    timeout: 60000
-  })
+  const confirmButton = await page.waitForSelector('text=無料VPSの利用を継続する', { timeout: 10000 })
+  await Promise.all([
+    confirmButton.click(),
+    page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 })
+  ])
   
   // 检查是否成功
-  const successText = await page.$('text=更新が完了しました')
-  if (successText) {
+  try {
+    await page.waitForSelector('text=更新が完了しました', { timeout: 10000 })
     console.log('VPS续约成功!')
-  } else {
-    console.log('续约完成，但未检测到成功文本')
+  } catch (e) {
+    // 保存最终页面截图
+    await page.screenshot({ path: 'result.png', fullPage: true })
+    console.log('续约完成，但未检测到成功文本 - 已保存result.png')
   }
 } catch (e) {
   console.error('流程出错:', e)
@@ -215,7 +202,5 @@ try {
   // 保存错误截图
   await page.screenshot({ path: 'error.png', fullPage: true })
 } finally {
-  await setTimeout(5000)
-  await recorder.stop()
   await browser.close()
 }
