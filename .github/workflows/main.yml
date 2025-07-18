@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
 
 jobs:
-job:
+  job:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -18,7 +18,6 @@ job:
           EMAIL: ${{ secrets.EMAIL }}
           PASSWORD: ${{ secrets.PASSWORD }}
           PROXY_SERVER: ${{ secrets.PROXY_SERVER }}
-          CAPTCHA_API_KEY: ${{ secrets.CAPTCHA_API_KEY }}
       - uses: actions/upload-artifact@v4
         with:
           path: recording.webm
