@@ -1,6 +1,7 @@
 import puppeteer from 'puppeteer';
 import { setTimeout } from 'node:timers/promises';
 import TwoCaptcha from '2captcha';
+import 'dotenv/config';
 
 // 初始化 2Captcha 解决器
 const solver = new TwoCaptcha.Solver(process.env.TWOCAPTCHA_KEY);
@@ -42,25 +43,26 @@ try {
     await page.locator('text=更新する').click();
     await page.locator('text=引き続き無料VPSの利用を継続する').click();
     await page.waitForNavigation({ waitUntil: 'networkidle2' });
+
     // 获取并提交图像验证码
     const body = await page.$eval('img[src^="data:"]', img => img.src);
     const code = await fetch('https://captcha-120546510085.asia-northeast1.run.app', { method: 'POST', body }).then(r => r.text());
-    await page.locator('[placeholder="上の画像的数字を入力"]').fill(code);
-    await page.waitForTimeout(5000); // 等待 5 秒以确保页面加载
+    console.log('获取的验证码：', code);
+
+    // 等待验证码输入框出现
+    await page.waitForSelector('[placeholder="上の画像の数字を入力"]', { timeout: 30000 });
+    await page.locator('[placeholder="上の画像の数字を入力"]').fill(code);
+    await page.waitForTimeout(35000); // 等待 5 秒以确保页面响应
 
     // 检查 Cloudflare Turnstile 挑战
-    const turnstileCheckbox = await page.$('input[type="checkbox"]');
-    if (turnstileCheckbox) {
-        console.log('检测到 Turnstile 复选框，调用 2Captcha 解决...');
+    const turnstileIframe = await page.$('#cf-chl-widget-x0421');
+    if (turnstileIframe) {
+        console.log('检测到 Cloudflare Turnstile 挑战，调用 2Captcha 解决...');
 
-        // 从页面中提取 sitekey（可能需要从脚本或 iframe 中获取）
-        const iframe = await page.$('#cf-chl-widget-x0421');
-        let sitekey = null;
-        if (iframe) {
-            const iframeSrc = await iframe.evaluate(el => el.getAttribute('src'));
-            const sitekeyMatch = iframeSrc.match(/0x4[A-Za-z0-9]+/);
-            sitekey = sitekeyMatch ? sitekeyMatch[0] : null;
-        }
+        // 从 iframe src 中提取 sitekey
+        const iframeSrc = await turnstileIframe.evaluate(el => el.getAttribute('src'));
+        const sitekeyMatch = iframeSrc.match(/0x4[A-Za-z0-9]+/);
+        const sitekey = sitekeyMatch ? sitekeyMatch[0] : null;
         if (!sitekey) {
             throw new Error('无法从 iframe src 中提取 sitekey');
         }
@@ -85,17 +87,11 @@ try {
             }
         }, token);
 
-        // 模拟点击复选框（如果需要）
-        await turnstileCheckbox.click();
-        await page.waitForTimeout(5000); // 等待 5 秒以确保验证开始
-
-        // 等待验证成功状态
-        await page.waitForSelector('#success', { timeout: 10000 }).catch(() => {
-            console.log('未检测到验证成功状态，可能需要更多时间');
-        });
-        console.log('Turnstile 挑战已解决');
+        // 等待 Turnstile 验证完成
+        await page.waitForTimeout(5000); // 等待 5 秒
+        console.log('Turnstile 挑战已解决并注入令牌');
     } else {
-        console.log('未检测到 Turnstile 复选框，继续执行...');
+        console.log('未检测到 Turnstile 挑战，继续执行...');
     }
 
     // 等待目标按钮出现并确保可交互
