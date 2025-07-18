@@ -1,54 +1,26 @@
-name: XServer VPS Renewal
-
 on:
   schedule:
-    - cron: '0 7,15,23 * * *'  # 每天UTC时间7点、15点和23点运行
+    - cron: 0 7,15,23 * * *
   push:
-    branches:
-      - main
   workflow_dispatch:
 
 jobs:
-  renew:
+  job:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    
+    timeout-minutes: 10
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-        
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: 20
-          cache: 'yarn'
-          
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgbm-dev libasound2-dev
-          
-      - name: Install project dependencies
-        run: yarn add puppeteer puppeteer-extra puppeteer-extra-plugin-stealth puppeteer-extra-plugin-recaptcha
-        
-      - name: Run renewal script
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v4
+      - run: sudo apt-get update
+      - run: sudo apt-get install -y libgbm-dev libasound2-dev
+      - run: sudo apt-get -qq update && sudo apt-get -yqq install --no-install-recommends ffmpeg fonts-noto-cjk
+      - run: yarn add puppeteer
+      - run: node main.mjs
         env:
           EMAIL: ${{ secrets.EMAIL }}
           PASSWORD: ${{ secrets.PASSWORD }}
           TWO_CAPTCHA_API_KEY: ${{ secrets.TWO_CAPTCHA_API_KEY }}
           PROXY_SERVER: ${{ secrets.PROXY_SERVER }}
-        run: node main.mjs
-        
-      - name: Upload error screenshot
-        if: failure()
-        uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
-          name: error-screenshot
-          path: error.png
-          
-      - name: Upload result screenshot
-        if: success()
-        uses: actions/upload-artifact@v3
-        with:
-          name: result-screenshot
-          path: result.png
+          path: recording.webm
