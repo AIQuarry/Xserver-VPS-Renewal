@@ -5,29 +5,20 @@ on:
     - cron: '45 0 * * *'  # 日本时间 09:45
   workflow_dispatch:
 
-jobs:
-  run:
+job:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      EMAIL: ${{ secrets.EMAIL }}
-      PASSWORD: ${{ secrets.PASSWORD }}
-      CAPTCHA_API_KEY: ${{ secrets.CAPTCHA_API_KEY }}
-      SCKEY_SENDKEY: ${{ secrets.SCKEY_SENDKEY }}
-      CHEVERETO_API_KEY: ${{ secrets.CHEVERETO_API_KEY }}
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-node@v4
       - run: sudo apt-get -qq update && sudo apt-get -yqq install --no-install-recommends ffmpeg fonts-noto-cjk
       - run: yarn add puppeteer
-      - run: yarn add form-data
-      - run: yarn add puppeteer-screen-recorder
       - run: node main.mjs
-      - name: 上传截图
-        uses: actions/upload-artifact@v4
+        env:
+          EMAIL: ${{ secrets.EMAIL }}
+          PASSWORD: ${{ secrets.PASSWORD }}
+          PROXY_SERVER: ${{ secrets.PROXY_SERVER }}
+          CAPTCHA_API_KEY: ${{ secrets.CAPTCHA_API_KEY }}
+      - uses: actions/upload-artifact@v4
         with:
-          name: screenshot
-          path: |
-            recording.webm
-            success.png
-            error-*.png
+          path: recording.webm
