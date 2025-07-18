@@ -1,7 +1,6 @@
 import puppeteer from 'puppeteer';
 import { setTimeout } from 'node:timers/promises';
 import TwoCaptcha from '2captcha';
-import 'dotenv/config';
 
 // 初始化 2Captcha 解决器
 const solver = new TwoCaptcha.Solver(process.env.TWOCAPTCHA_KEY);
