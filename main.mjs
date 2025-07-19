@@ -9,24 +9,52 @@ if (process.env.PROXY_SERVER) {
     args.push(`--proxy-server=${proxy_url}`.replace(/\/$/, ''))
 }
 
-const browser = await puppeteer.launch({
-    defaultViewport: { width: 1080, height: 1024 },
-    args,
-})
+const browser = await puppeteer.launch({ defaultViewport: { width: 1080, height: 1024 }, args })
 const [page] = await browser.pages()
-const userAgent = await browser.userAgent()
-await page.setUserAgent(userAgent.replace('Headless', ''))
+await page.setUserAgent((await browser.userAgent()).replace('Headless', ''))
 const recorder = await page.screencast({ path: 'recording.webm' })
+
+async function solveTurnstileV2(sitekey, pageUrl) {
+    const apiKey = process.env.TWOCAPTCHA_KEY
+    console.log('→ 提交 createTask API v2，sitekey:', sitekey)
+    const createRes = await fetch('https://api.2captcha.com/createTask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            clientKey: apiKey,
+            task: { type: 'TurnstileTaskProxyless', websiteURL: pageUrl, websiteKey: sitekey }
+        })
+    })
+    const createJson = await createRes.json()
+    if (createJson.errorId !== 0) throw new Error('createTask 错误: ' + createJson.errorCode)
+    const taskId = createJson.taskId
+    console.log('→ Task ID:', taskId)
+
+    for (let i = 0; i < 30; i++) {
+        await setTimeout(5000)
+        const res = await fetch('https://api.2captcha.com/getTaskResult', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ clientKey: apiKey, taskId })
+        })
+        const j = await res.json()
+        if (j.errorId !== 0) throw new Error('getTaskResult 错误: ' + j.errorCode)
+        if (j.status === 'ready') {
+            console.log('→ 获取 token 成功')
+            return j.solution.token
+        }
+        console.log('…等待中', i + 1)
+    }
+    throw new Error('2Captcha v2 获取超时')
+}
 
 try {
     if (process.env.PROXY_SERVER) {
         const { username, password } = new URL(process.env.PROXY_SERVER)
-        if (username && password) {
-            await page.authenticate({ username, password })
-        }
+        if (username && password) await page.authenticate({ username, password })
     }
 
-    // 登录 & 导航到续费页
+    // 登录与导航
     await page.goto('https://secure.xserver.ne.jp/xapanel/login/xvps/', { waitUntil: 'networkidle2' })
     await page.locator('#memberid').fill(process.env.EMAIL)
     await page.locator('#user_password').fill(process.env.PASSWORD)
@@ -39,97 +67,48 @@ try {
 
     // 普通图形验证码
     const body = await page.$eval('img[src^="data:"]', img => img.src)
-    const code = await fetch('https://captcha-120546510085.asia-northeast1.run.app', {
-        method: 'POST',
-        body
-    }).then(r => r.text())
+    const code = await fetch('https://captcha-120546510085.asia-northeast1.run.app', { method: 'POST', body })
+        .then(r => r.text())
     await page.locator('[placeholder="上の画像の数字を入力"]').fill(code)
 
-    // ---- 调试：打印所有 frame URLs ----
-    console.log('---- 当前所有 frame URLs ----')
-    for (const f of page.frames()) {
-      console.log('•', f.url())
-    }
-    console.log('-----------------------------')
+    // Debug: 列印 frames
+    console.log('---- frames ----')
+    for (const f of page.frames()) console.log('•', f.url())
+    console.log('----------------')
 
-    // Cloudflare Turnstile 检测 & 处理
+    // 检测 Turnstile iframe
     const cfFrame = page.frames().find(f =>
-      f.url().includes('challenges.cloudflare.com') &&
-      f.url().includes('/turnstile/if/')
+        f.url().includes('challenges.cloudflare.com') &&
+        f.url().includes('/turnstile/if/')
     )
-
     if (cfFrame) {
-        console.log('检测到 Turnstile frame →', cfFrame.url())
-
-        // 从 frame.url() 中提取 sitekey
-        const sitekeyMatch = cfFrame.url().match(/\/([0-9A-Za-z]{20,})\//)
-        const sitekey = sitekeyMatch ? sitekeyMatch[1] : null
-        console.log('提取到 sitekey:', sitekey)
-
-        if (sitekey) {
-            const apiKey = process.env.TWOCAPTCHA_KEY
-            const pageUrl = page.url()
-
-            // 提交到 2Captcha
-            const submitRes = await fetch(
-              `http://2captcha.com/in.php?key=${apiKey}&method=turnstile&sitekey=${sitekey}&pageurl=${encodeURIComponent(pageUrl)}`
-            )
-            const submitText = await submitRes.text()
-            if (!submitText.startsWith('OK|')) throw new Error('2Captcha 提交失败: ' + submitText)
-            const captchaId = submitText.split('|')[1]
-
-            // 轮询获取 token
-            let token = null
-            for (let i = 0; i < 30; i++) {
-                await setTimeout(5000)
-                const pollRes = await fetch(
-                  `http://2captcha.com/res.php?key=${apiKey}&action=get&id=${captchaId}`
-                )
-                const pollText = await pollRes.text()
-                if (pollText.startsWith('OK|')) {
-                    token = pollText.split('|')[1]
-                    break
-                }
-            }
-            if (!token) throw new Error('2Captcha Turnstile 超时')
-
-            // 注入 token 并提交表单
-            await page.evaluate(t => {
-                const inp = document.querySelector('input[name="cf-turnstile-response"]') ||
-                            (() => {
-                              const i = document.createElement('input')
-                              i.type = 'hidden'
-                              i.name = 'cf-turnstile-response'
-                              document.forms[0].appendChild(i)
-                              return i
-                            })()
-                inp.value = t
-                document.forms[0].submit()
-            }, token)
-
-            await page.waitForNavigation({ waitUntil: 'networkidle2' })
-            console.log('Turnstile 验证完成')
-        }
-    }
-    else if (await page.$('label.cb-lb input[type="checkbox"]')) {
-        console.log('检测到内联 Turnstile，点击复选框…')
-        await page.click('label.cb-lb input[type="checkbox"]')
-        await page.waitForSelector('#success', { timeout: 30000 })
-        console.log('内联 Turnstile 验证完成')
-    }
-    else {
-        console.log('⚠️ 未检测到任何 CF 验证，跳过这一步')
-    }
-
-    // 等待并点击最终续费按钮，30 秒超时退出
-    const btn = await page.waitForSelector('text=無料VPSの利用を継続する', { timeout: 30000 }).catch(() => null)
-    if (btn) {
-        await btn.click()
-        console.log('点击续费按钮 ✔️')
+        console.log('检测到 Turnstile iframe:', cfFrame.url())
+        const sitekey = (cfFrame.url().match(/\/([0-9A-Za-z]{20,})\//) || [])[1]
+        if (!sitekey) throw new Error('提取 sitekey 失败')
+        const token = await solveTurnstileV2(sitekey, page.url())
+        // 注入并提交
+        await page.evaluate(t => {
+            const inp = document.querySelector('input[name="cf-turnstile-response"]') ||
+                (() => {
+                    const i = document.createElement('input')
+                    i.type = 'hidden'
+                    i.name = 'cf-turnstile-response'
+                    document.forms[0].appendChild(i)
+                    return i
+                })()
+            inp.value = t
+            document.forms[0].submit()
+        }, token)
+        await page.waitForNavigation({ waitUntil: 'networkidle2' })
     } else {
-        throw new Error('30 秒内未检测到续费按钮')
+        console.log('⚠️ 未检测到 Turnstile iframe，跳过')
     }
 
+    // 点击续费按钮
+    const btn = await page.waitForSelector('text=無料VPSの利用を継続する', { timeout: 30000 }).catch(() => null)
+    if (!btn) throw new Error('无法找到续费按钮')
+    await btn.click()
+    console.log('续费按钮点击成功')
 } catch (e) {
     console.error('发生错误:', e)
 } finally {
