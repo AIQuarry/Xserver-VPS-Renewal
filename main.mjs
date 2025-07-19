@@ -1,6 +1,7 @@
 import puppeteer from 'puppeteer'
 import { setTimeout } from 'node:timers/promises'
 
+
 const args = ['--no-sandbox', '--disable-setuid-sandbox']
 if (process.env.PROXY_SERVER) {
   const proxy_url = new URL(process.env.PROXY_SERVER)
@@ -40,44 +41,81 @@ async function solveTurnstileV2(sitekey, pageUrl) {
   throw new Error('Turnstile 验证超时')
 }
 
-// 检测Cloudflare验证状态
-async function checkCFVerification(page) {
+// 处理 iframe 版 Turnstile 验证
+async function handleIframeTurnstile(page) {
+  console.log('检测到 iframe 版 Turnstile 验证')
+  
+  // 查找包含 Turnstile 验证的 iframe
+  const cfFrame = page.frames().find(f => 
+    f.url().includes('challenges.cloudflare.com') && 
+    f.url().includes('/turnstile/')
+  )
+  
+  if (!cfFrame) {
+    console.log('未找到 Turnstile iframe')
+    return false
+  }
+  
+  // 从 iframe URL 提取 sitekey
+  const sitekeyMatch = cfFrame.url().match(/\/([0-9A-Za-z]{20,})\//)
+  if (!sitekeyMatch || !sitekeyMatch[1]) {
+    console.log('无法从 iframe URL 提取 sitekey')
+    return false
+  }
+  
+  const sitekey = sitekeyMatch[1]
+  console.log('提取到 sitekey:', sitekey)
+  
+  // 使用 2Captcha 解决验证
+  const token = await solveTurnstileV2(sitekey, page.url())
+  console.log('获取到 Turnstile token:', token.substring(0, 10) + '...')
+  
+  // 将 token 注入页面
+  await page.evaluate((t) => {
+    // 查找或创建隐藏输入字段
+    let input = document.querySelector('input[name="cf-turnstile-response"]')
+    if (!input) {
+      input = document.createElement('input')
+      input.type = 'hidden'
+      input.name = 'cf-turnstile-response'
+      document.forms[0].appendChild(input)
+    }
+    input.value = t
+    
+    // 尝试触发验证成功事件
+    const event = new Event('input', { bubbles: true })
+    input.dispatchEvent(event)
+    
+    console.log('Turnstile token 已注入')
+  }, token)
+  
+  return true
+}
+
+// 处理内联版 Turnstile 验证
+async function handleInlineTurnstile(page) {
+  console.log('检测到内联版 Turnstile 验证')
+  
   try {
-    // 检查验证框是否成功显示
-    await page.waitForSelector('iframe[src*="challenges.cloudflare.com"]', { timeout: 5000 })
-    
-    // 检查成功标志
-    const isSuccess = await page.evaluate(() => {
-      const container = document.querySelector('.cf-turnstile');
-      return container && container.classList.contains('cf-turnstile-success');
-    });
-    
-    if (isSuccess) {
-      console.log('✅ Cloudflare验证已通过');
-      return true;
+    // 查找并点击验证框
+    const checkboxLabel = await page.waitForSelector('label.cb-lb', { visible: true, timeout: 5000 })
+    if (!checkboxLabel) {
+      console.log('未找到验证框标签')
+      return false
     }
     
-    // 检查错误标志
-    const isError = await page.evaluate(() => {
-      const container = document.querySelector('.cf-turnstile');
-      return container && container.classList.contains('cf-turnstile-error');
-    });
+    // 点击验证框
+    await checkboxLabel.click()
+    console.log('已点击验证框')
     
-    if (isError) {
-      console.log('❌ Cloudflare验证失败');
-      return false;
-    }
+    // 等待验证成功
+    await page.waitForSelector('#success', { visible: true, timeout: 30000 })
+    console.log('验证成功状态已显示')
     
-    // 检查隐藏输入框是否有值
-    const hasToken = await page.evaluate(() => {
-      const input = document.querySelector('input[name="cf-turnstile-response"]');
-      return input && input.value.length > 10;
-    });
-    
-    return hasToken;
+    return true
   } catch (e) {
-    console.log('Cloudflare验证状态检测失败:', e.message);
-    return false;
+    console.log('处理内联验证时出错:', e.message)
+    return false
   }
 }
 
@@ -98,122 +136,92 @@ try {
   await page.locator('text=引き続き無料VPSの利用を継続する').click()
   await page.waitForNavigation({ waitUntil: 'networkidle2' })
 
-  // Turnstile 验证 (带重试机制)
-  let cfVerified = false;
-  let retryCount = 0;
+  // 检测并处理 Turnstile 验证
+  console.log('检测 Turnstile 验证类型...')
   
-  while (!cfVerified && retryCount < 3) {
-    console.log(`尝试Cloudflare验证 (第 ${retryCount + 1} 次)`);
-    const cfFrame = page.frames().find(f =>
-      f.url().includes('challenges.cloudflare.com') &&
-      f.url().includes('/turnstile/if/')
-    )
+  // 尝试处理 iframe 版验证
+  const iframeDetected = await page.$('iframe[src*="turnstile"]') !== null
+  if (iframeDetected) {
+    console.log('检测到 iframe 版 Turnstile 验证')
+    const iframeSuccess = await handleIframeTurnstile(page)
+    if (!iframeSuccess) {
+      throw new Error('iframe 版验证处理失败')
+    }
+  } 
+  // 尝试处理内联版验证
+  else {
+    console.log('未检测到 iframe 版验证，尝试检测内联版')
+    const inlineDetected = await page.$('label.cb-lb') !== null
     
-    if (cfFrame) {
-      const sitekey = (cfFrame.url().match(/\/([0-9A-Za-z]{20,})\//) || [])[1]
-      const token = await solveTurnstileV2(sitekey, page.url())
-      
-      await page.evaluate(t => {
-        // 尝试找到现有输入框或创建新输入框
-        let inp = document.querySelector('input[name="cf-turnstile-response"]');
-        if (!inp) {
-          inp = document.createElement('input');
-          inp.type = 'hidden';
-          inp.name = 'cf-turnstile-response';
-          document.forms[0].appendChild(inp);
-        }
-        inp.value = t;
-        
-        // 尝试触发验证成功事件
-        const event = new Event('cf-turnstile-success', { bubbles: true });
-        inp.dispatchEvent(event);
-        
-        // 尝试更新验证框状态
-        const container = document.querySelector('.cf-turnstile');
-        if (container) {
-          container.classList.add('cf-turnstile-success');
-          container.classList.remove('cf-turnstile-error');
-        }
-      }, token);
-      
-      // 等待可能的页面更新
-      await setTimeout(3000);
-      
-      // 检查验证是否真正通过
-      cfVerified = await checkCFVerification(page);
-      
-      if (!cfVerified) {
-        console.log('Cloudflare验证未通过，准备重试...');
-        // 刷新验证框
-        await page.evaluate(() => {
-          const container = document.querySelector('.cf-turnstile');
-          if (container) {
-            container.innerHTML = ''; // 清空容器
-            if (window.turnstile) {
-              window.turnstile.render(container, {
-                sitekey: container.dataset.sitekey,
-                callback: function(token) {
-                  document.querySelector('input[name="cf-turnstile-response"]').value = token;
-                }
-              });
-            }
-          }
-        });
+    if (inlineDetected) {
+      console.log('检测到内联版 Turnstile 验证')
+      const inlineSuccess = await handleInlineTurnstile(page)
+      if (!inlineSuccess) {
+        throw new Error('内联版验证处理失败')
       }
     } else {
-      console.log('未找到Cloudflare验证框，可能不需要验证');
-      cfVerified = true; // 没有验证框也算通过
+      console.log('未检测到任何形式的 Turnstile 验证，继续执行')
     }
-    
-    retryCount++;
-    if (!cfVerified && retryCount < 3) await setTimeout(2000); // 重试前等待
-  }
-  
-  if (!cfVerified) {
-    throw new Error('Cloudflare验证失败，重试次数用尽');
   }
 
   // 图像验证码（使用原本验证码服务）
-  const body = await page.$eval('img[src^="data:"]', el => el.src)
-  const code = await fetch('https://captcha-120546510085.asia-northeast1.run.app', {
-    method: 'POST',
-    body
-  }).then(r => r.text())
-  console.log('图形验证码结果:', code)
-  await page.locator('[placeholder="上の画像の数字を入力"]').fill(code)
+  const captchaImg = await page.$('img[src^="data:"]')
+  if (captchaImg) {
+    const body = await page.$eval('img[src^="data:"]', el => el.src)
+    const code = await fetch('https://captcha-120546510085.asia-northeast1.run.app', {
+      method: 'POST',
+      body
+    }).then(r => r.text())
+    console.log('图形验证码结果:', code)
+    await page.locator('[placeholder="上の画像の数字を入力"]').fill(code)
+  } else {
+    console.log('未检测到图像验证码')
+  }
 
-  // 点击续订按钮（带状态检测）
-  const btn = await page.waitForSelector('text=無料VPSの利用を継続する', { timeout: 30000, visible: true }).catch(() => null)
+  // 点击续订按钮
+  const btnSelector = 'text=無料VPSの利用を継続する'
+  const btn = await page.waitForSelector(btnSelector, { timeout: 30000, visible: true })
+    .catch(() => null)
   
   if (!btn) {
-    throw new Error('无法找到续费按钮');
+    throw new Error('无法找到续费按钮')
   }
   
-  // 检查按钮是否可用
-  const isDisabled = await btn.evaluate(b => b.disabled);
+  // 检查按钮状态
+  const isDisabled = await btn.evaluate(b => b.disabled)
   if (isDisabled) {
-    throw new Error('续费按钮处于禁用状态');
+    throw new Error('续费按钮处于禁用状态')
   }
   
-  await btn.click();
-  console.log('✅ 续费按钮点击成功');
+  await btn.click()
+  console.log('✅ 续费按钮点击成功')
+  
+  // 等待操作完成
+  try {
+    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 })
+    console.log('页面导航完成')
+  } catch (e) {
+    console.log('等待导航超时，检查成功状态')
+  }
   
   // 检查操作结果
-  await page.waitForSelector('.alert-success, #success-message', { timeout: 10000 }).catch(() => {
-    throw new Error('续费操作完成，但未检测到成功提示');
-  });
-  
-  console.log('✅ 续费操作成功确认');
+  const successIndicator = await page.$('.alert-success, #success-message, .text-success')
+  if (successIndicator) {
+    const successText = await successIndicator.evaluate(el => el.textContent.trim())
+    console.log(`✅ 续费成功: ${successText.substring(0, 50)}...`)
+  } else {
+    throw new Error('未检测到续费成功提示')
+  }
   
   // 等待5秒确保页面稳定
-  console.log('等待5秒确保页面稳定...');
-  await setTimeout(5000);
+  console.log('等待5秒确保页面稳定...')
+  await setTimeout(5000)
 
 } catch (e) {
   console.error('❌ 发生错误:', e)
   await page.screenshot({ path: 'failure.png', fullPage: true })
   console.log('📸 已保存失败截图：failure.png')
-  throw e // 重新抛出错误以便外部处理
+  throw e
 } finally {
   await recorder.stop()
   await browser.close()
