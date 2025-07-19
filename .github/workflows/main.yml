@@ -26,4 +26,4 @@ jobs:
         with:
           path: |
                recording.webm
-               error.png
+               failure.png
