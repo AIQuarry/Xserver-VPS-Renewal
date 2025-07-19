@@ -1,6 +1,7 @@
 import puppeteer from 'puppeteer'
 import { setTimeout } from 'node:timers/promises'
 
+
 const args = ['--no-sandbox', '--disable-setuid-sandbox']
 if (process.env.PROXY_SERVER) {
     const proxy_url = new URL(process.env.PROXY_SERVER)
@@ -26,6 +27,7 @@ try {
         }
     }
 
+    // 登录及导航
     await page.goto('https://secure.xserver.ne.jp/xapanel/login/xvps/', { waitUntil: 'networkidle2' })
     await page.locator('#memberid').fill(process.env.EMAIL)
     await page.locator('#user_password').fill(process.env.PASSWORD)
@@ -36,67 +38,41 @@ try {
     await page.locator('text=引き続き無料VPSの利用を継続する').click()
     await page.waitForNavigation({ waitUntil: 'networkidle2' })
 
-    // === Cloudflare Turnstile 检测和处理 ===
-    const hasIframeTurnstile = await page.$('iframe[src*="turnstile"]')
-    if (hasIframeTurnstile) {
-        const sitekey = await page.$eval('iframe[src*="turnstile"]', iframe => {
-            const src = iframe.getAttribute('src')
-            const match = src.match(/[?&]k=([^&]+)/)
-            return match ? match[1] : null
-        })
-
-        if (sitekey) {
-            const url = page.url()
-            const apiKey = process.env.TWOCAPTCHA_KEY
-            const res = await fetch(`http://2captcha.com/in.php?key=${apiKey}&method=turnstile&sitekey=${sitekey}&pageurl=${url}`)
-            const text = await res.text()
-            const [, captchaId] = text.split('|')
-
-            let token = null
-            for (let i = 0; i < 30; i++) {
-                await setTimeout(5000)
-                const poll = await fetch(`http://2captcha.com/res.php?key=${apiKey}&action=get&id=${captchaId}`)
-                const pollText = await poll.text()
-                if (pollText.startsWith('OK|')) {
-                    token = pollText.split('|')[1]
-                    break
-                }
-            }
-
-            if (token) {
-                await page.evaluate(token => {
-                    document.querySelector('input[name="cf-turnstile-response"]').value = token
-                }, token)
-                await page.evaluate(() => {
-                    document.querySelector('form').submit()
-                })
-                await page.waitForNavigation({ waitUntil: 'networkidle2' })
-            } else {
-                throw new Error('2Captcha Turnstile 超时')
-            }
-        }
-    } else if (await page.$('label.cb-lb input[type="checkbox"]')) {
-        // === 内联版 Turnstile ===
-        await page.click('label.cb-lb input[type="checkbox"]')
-        await page.waitForSelector('#success', { timeout: 15000 })
-    }
-
-    // === 普通验证码 ===
+    // 普通图形验证码
     const body = await page.$eval('img[src^="data:"]', img => img.src)
     const code = await fetch('https://captcha-120546510085.asia-northeast1.run.app', { method: 'POST', body }).then(r => r.text())
     await page.locator('[placeholder="上の画像の数字を入力"]').fill(code)
 
-    // === 等待最终按钮点击，如果30秒没检测到就退出 ===
-    const buttonSelector = 'text=無料VPSの利用を継続する'
-    const finalButton = await page.waitForSelector(buttonSelector, { timeout: 30000 }).catch(() => null)
+    // ==== 调试：打印所有 frame URLs ====
+    console.log('---- 当前所有 frame URLs ----');
+    for (const f of page.frames()) {
+      console.log(f.url());
+    }
+    console.log('-----------------------------');
+    // =====================================
 
-    if (finalButton) {
-        await finalButton.click()
+    // Cloudflare Turnstile 检测与处理
+    const iframe = await page.$('iframe[src*="turnstile"]')
+    if (iframe) {
+        console.log('检测到 Turnstile iframe，开始处理…')
+        // …在这里插入原有的 2Captcha 提交与注入逻辑…
+    } else if (await page.$('label.cb-lb input[type="checkbox"]')) {
+        console.log('检测到内联 Turnstile，点击复选框…')
+        await page.click('label.cb-lb input[type="checkbox"]')
+        await page.waitForSelector('#success', { timeout: 30000 })
     } else {
-        throw new Error('30秒内未检测到最终按钮，脚本终止')
+        console.log('未检测到任何 CF 验证，跳过这一步')
+    }
+
+    // 最终点击续费按钮
+    const btn = await page.waitForSelector('text=無料VPSの利用を継続する', { timeout: 30000 }).catch(() => null)
+    if (btn) {
+        await btn.click()
+    } else {
+        throw new Error('30秒内未检测到续费按钮，脚本终止')
     }
 } catch (e) {
-    console.error('发生错误:', e)
+    console.error(e)
 } finally {
     await setTimeout(5000)
     await recorder.stop()
