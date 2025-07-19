@@ -1,6 +1,7 @@
 import puppeteer from 'puppeteer'
 import { setTimeout } from 'node:timers/promises'
 
+
 const args = ['--no-sandbox', '--disable-setuid-sandbox']
 if (process.env.PROXY_SERVER) {
   const proxy_url = new URL(process.env.PROXY_SERVER)
@@ -99,6 +100,8 @@ try {
   await page.screenshot({ path: 'failure.png', fullPage: true })
   console.log('📸 已保存失败截图：failure.png')
 } finally {
+  // 确保等待5秒后才停止录制和关闭浏览器
+  console.log('等待5秒确保录制完整...')
   await setTimeout(5000)
   await recorder.stop()
   await browser.close()
