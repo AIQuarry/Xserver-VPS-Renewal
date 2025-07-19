@@ -42,7 +42,7 @@ async function solveTurnstileV2(sitekey, pageUrl) {
 }
 
 async function handleTurnstileVerification(page) {
-  console.log('检测 Cloudflare Turnstile 验证...')
+  console.log('处理 Cloudflare Turnstile 验证...')
   
   // 查找包含 /turnstile/if/ 的 iframe
   const cfFrame = page.frames().find(f => 
@@ -55,12 +55,10 @@ async function handleTurnstileVerification(page) {
     return false
   }
   
-  console.log('找到 Turnstile iframe:', cfFrame.url())
-  
   // 从 URL 提取 sitekey
   const sitekeyMatch = cfFrame.url().match(/\/([0-9A-Za-z]{20,})\//)
   if (!sitekeyMatch || !sitekeyMatch[1]) {
-    console.log('无法从 URL 提取 sitekey:', cfFrame.url())
+    console.log('无法从 URL 提取 sitekey')
     return false
   }
   
@@ -82,37 +80,96 @@ async function handleTurnstileVerification(page) {
     }
     input.value = t
     
+    // 触发输入事件
     const event = new Event('input', { bubbles: true })
     input.dispatchEvent(event)
+    
+    // 尝试触发验证成功事件
+    try {
+      const successEvent = new Event('cf-turnstile-success', { bubbles: true })
+      input.dispatchEvent(successEvent)
+    } catch (e) {}
   }, token)
+  
+  console.log('✅ Turnstile token 已注入')
+  return true
+}
+
+// 检查续订按钮状态
+async function checkRenewButton(page) {
+  const btnSelector = 'text=無料VPSの利用を継続する'
+  
+  // 查找按钮
+  const btn = await page.$(btnSelector).catch(() => null)
+  if (!btn) {
+    console.log('未找到续订按钮')
+    return { found: false }
+  }
+  
+  // 检查按钮是否可见
+  const isVisible = await btn.isIntersectingViewport()
+  if (!isVisible) {
+    console.log('按钮不可见，尝试滚动到视图')
+    await btn.scrollIntoView()
+    await setTimeout(1000)
+  }
+  
+  // 检查按钮是否禁用
+  const isDisabled = await btn.evaluate(b => b.disabled)
+  
+  // 检查禁用原因
+  let disabledReason = null
+  if (isDisabled) {
+    disabledReason = await page.evaluate(() => {
+      // 查找关联的错误消息
+      const errorElement = document.querySelector('.error-message, .invalid-feedback, .text-danger')
+      return errorElement ? errorElement.textContent.trim() : '未知原因'
+    }).catch(() => '未知原因')
+  }
+  
+  return {
+    found: true,
+    element: btn,
+    disabled: isDisabled,
+    reason: disabledReason
+  }
+}
+
+// 重新验证流程
+async function retryVerification(page) {
+  console.log('开始重新验证流程...')
+  
+  // 1. 重新进行 Cloudflare 验证
+  const cfResult = await handleTurnstileVerification(page)
+  if (!cfResult) {
+    console.log('Cloudflare 验证失败')
+    return false
+  }
   
   // 等待验证状态更新
   await setTimeout(3000)
   
-  // 检查验证是否成功
-  const isVerified = await page.evaluate(() => {
-    const input = document.querySelector('input[name="cf-turnstile-response"]')
-    return input && input.value.length > 50
-  })
-  
-  if (isVerified) {
-    console.log('✅ Turnstile 验证成功')
-    return true
-  }
-  
-  console.log('⚠️ 验证状态未更新，尝试提交表单')
-  await page.evaluate(() => {
-    const form = document.forms[0]
-    if (form) form.submit()
-  })
-  
+  // 2. 检查图像验证码是否需要重新输入
   try {
-    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 10000 })
-    return true
+    const captchaImg = await page.$('img[src^="data:"]')
+    if (captchaImg) {
+      console.log('重新处理图像验证码')
+      const body = await captchaImg.evaluate(el => el.src)
+      const code = await fetch('https://captcha-120546510085.asia-northeast1.run.app', {
+        method: 'POST',
+        body
+      }).then(r => r.text())
+      
+      await page.locator('[placeholder="上の画像の数字を入力"]').fill('')
+      await setTimeout(500)
+      await page.locator('[placeholder="上の画像の数字を入力"]').fill(code)
+      console.log('图像验证码已重新输入:', code)
+    }
   } catch (e) {
-    console.log('表单提交后未发生导航')
-    return false
+    console.log('图像验证码处理失败:', e.message)
   }
+  
+  return true
 }
 
 try {
@@ -121,46 +178,28 @@ try {
     if (username && password) await page.authenticate({ username, password })
   }
 
-  // 登录流程
+  // 登录并跳转续订页面
   await page.goto('https://secure.xserver.ne.jp/xapanel/login/xvps/', { waitUntil: 'networkidle2' })
   await page.locator('#memberid').fill(process.env.EMAIL)
   await page.locator('#user_password').fill(process.env.PASSWORD)
-  await Promise.all([
-    page.locator('text=ログインする').click(),
-    page.waitForNavigation({ waitUntil: 'networkidle2' })
-  ])
-  
-  // 续订流程
-  await Promise.all([
-    page.locator('a[href^="/xapanel/xvps/server/detail?id="]').click(),
-    page.waitForNavigation({ waitUntil: 'networkidle2' })
-  ])
-  
-  await Promise.all([
-    page.locator('text=更新する').click(),
-    page.waitForNavigation({ waitUntil: 'networkidle2' })
-  ])
-  
-  await Promise.all([
-    page.locator('text=引き続き無料VPSの利用を継続する').click(),
-    page.waitForNavigation({ waitUntil: 'networkidle2' })
-  ])
+  await page.locator('text=ログインする').click()
+  await page.waitForNavigation({ waitUntil: 'networkidle2' })
+  await page.locator('a[href^="/xapanel/xvps/server/detail?id="]').click()
+  await page.locator('text=更新する').click()
+  await page.locator('text=引き続き無料VPSの利用を継続する').click()
+  await page.waitForNavigation({ waitUntil: 'networkidle2' })
 
-  // 处理验证
-  const turnstileDetected = page.frames().some(f => 
+  // 初始验证
+  const hasTurnstile = page.frames().some(f => 
     f.url().includes('challenges.cloudflare.com') && 
     f.url().includes('/turnstile/if/')
   )
   
-  if (turnstileDetected) {
-    const verificationSuccess = await handleTurnstileVerification(page)
-    if (!verificationSuccess) throw new Error('Cloudflare 验证失败')
-    
-    // 替换原来的 waitForLoadState
-    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 10000 }).catch(() => {})
+  if (hasTurnstile) {
+    await handleTurnstileVerification(page)
   }
 
-  // 图像验证码
+  // 处理图像验证码
   try {
     const captchaImg = await page.waitForSelector('img[src^="data:"]', { timeout: 5000 })
     const body = await captchaImg.evaluate(el => el.src)
@@ -169,37 +208,68 @@ try {
       body
     }).then(r => r.text())
     await page.locator('[placeholder="上の画像の数字を入力"]').fill(code)
+    console.log('图形验证码结果:', code)
   } catch (e) {
-    console.log('未检测到图像验证码:', e.message)
+    console.log('未检测到图像验证码')
   }
 
-  // 续订操作
-  const btn = await page.waitForSelector('text=無料VPSの利用を継続する', { 
-    timeout: 30000,
-    visible: true 
-  })
+  // 按钮状态检查和重试机制
+  let retryCount = 0
+  const maxRetries = 2
+  let btnStatus = await checkRenewButton(page)
   
-  await btn.click()
+  while (btnStatus.found && btnStatus.disabled && retryCount < maxRetries) {
+    console.log(`按钮被禁用 (原因: ${btnStatus.reason}), 尝试重新验证 (${retryCount + 1}/${maxRetries})`)
+    
+    // 重新验证
+    const retrySuccess = await retryVerification(page)
+    if (!retrySuccess) {
+      console.log('重新验证失败')
+      break
+    }
+    
+    // 重新检查按钮状态
+    await setTimeout(2000)
+    btnStatus = await checkRenewButton(page)
+    
+    retryCount++
+  }
+
+  // 最终按钮状态检查
+  if (!btnStatus.found) {
+    throw new Error('无法找到续订按钮')
+  }
+  
+  if (btnStatus.disabled) {
+    throw new Error(`续订按钮被禁用: ${btnStatus.reason}`)
+  }
+  
+  // 点击按钮前截图
+  await page.screenshot({ path: 'before_click.png' })
+  
+  // 点击按钮
+  console.log('点击续订按钮...')
+  await btnStatus.element.click()
   console.log('✅ 续费按钮点击成功')
   
   // 等待操作完成
   try {
     await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 })
+    console.log('页面导航完成')
   } catch (e) {
-    console.log('等待导航超时，检查成功状态')
+    console.log('等待导航超时，继续检查结果')
   }
   
-  // 检查结果
-  const successText = await page.evaluate(() => {
-    const successEl = document.querySelector('.alert-success, #success-message, .text-success') ||
-                     document.querySelector('*:contains("更新が完了しました"), *:contains("更新完了")')
-    return successEl?.textContent?.trim()
+  // 简单检查是否出现成功文本
+  const successDetected = await page.evaluate(() => {
+    return document.body.textContent.includes('更新が完了しました') || 
+           document.body.textContent.includes('更新完了')
   })
   
-  if (successText) {
-    console.log(`✅ 续费成功: ${successText.substring(0, 50)}${successText.length > 50 ? '...' : ''}`)
+  if (successDetected) {
+    console.log('✅ 续费操作成功')
   } else {
-    throw new Error('未检测到续费成功提示')
+    console.log('未检测到明确的成功消息')
   }
   
   await setTimeout(5000)
@@ -207,6 +277,7 @@ try {
 } catch (e) {
   console.error('❌ 发生错误:', e)
   await page.screenshot({ path: 'failure.png', fullPage: true })
+  console.log('📸 已保存失败截图：failure.png')
   throw e
 } finally {
   await recorder.stop()
