@@ -2,75 +2,78 @@ import puppeteer from 'puppeteer';
 import { setTimeout } from 'node:timers/promises';
 import TwoCaptcha from '2captcha';
 
-// 从 GitHub Actions 环境变量读取
+// 环境变量
 const {
-  EMAIL,            // 在仓库 Secrets 中设置 XSERVER_EMAIL
-  PASSWORD,         // 在仓库 Secrets 中设置 XSERVER_PASSWORD
-  TWOCAPTCHA_KEY,   // 在仓库 Secrets 中设置 TWOCAPTCHA_KEY
-  PROXY_SERVER      // （可选）在仓库 Secrets 中设置 PROXY_SERVER
+  EMAIL,
+  PASSWORD,
+  TWOCAPTCHA_KEY,      // 在 GH Secrets 中配置
+  PROXY_SERVER         // 如不需要可留空
 } = process.env;
 
+// 初始化 2Captcha
 const solver = new TwoCaptcha.Solver(TWOCAPTCHA_KEY);
 
 (async () => {
-  // 关闭全局导航超时
+  // Puppeteer 启动参数
+  const args = ['--no-sandbox', '--disable-setuid-sandbox'];
+  if (PROXY_SERVER) {
+    const proxy = new URL(PROXY_SERVER);
+    proxy.username = '';
+    proxy.password = '';
+    args.push(`--proxy-server=${proxy}`.replace(/\/$/, ''));
+  }
+
   const browser = await puppeteer.launch({
     defaultViewport: { width: 1080, height: 1024 },
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      ...(PROXY_SERVER
-        ? [`--proxy-server=${new URL(PROXY_SERVER).toString()}`]
-        : [])
-    ],
+    args,
   });
   const [page] = await browser.pages();
+
+  // 取消导航超时
   page.setDefaultNavigationTimeout(0);
 
-  // 去掉 Headless 标识
+  // 去掉 “Headless” 字样
   const ua = await browser.userAgent();
   await page.setUserAgent(ua.replace('Headless', ''));
 
-  // 如果需要代理认证
-  if (PROXY_SERVER) {
-    const { username, password } = new URL(PROXY_SERVER);
-    if (username && password) {
-      await page.authenticate({ username, password });
-    }
-  }
-
-  // 可选录屏占位（如需请用 puppeteer-screen-recorder）
-  const recorder = { stop: async () => {} };
+  // 原生录屏占位（如需真的录屏请换成 puppeteer-screen-recorder）
+  const recorder = await page.screencast({ path: 'recording.webm' });
 
   try {
+    // 代理认证
+    if (PROXY_SERVER) {
+      const { username, password } = new URL(PROXY_SERVER);
+      if (username && password) {
+        await page.authenticate({ username, password });
+      }
+    }
+
     // 1. 登录
-    await page.goto('https://secure.xserver.ne.jp/xapanel/login/xvps/', {
-      waitUntil: 'networkidle2',
-    });
+    await page.goto('https://secure.xserver.ne.jp/xapanel/login/xvps/', { waitUntil: 'networkidle2' });
     await page.type('#memberid', EMAIL);
     await page.type('#user_password', PASSWORD);
     await page.click('text=ログインする');
     await page.waitForNavigation({ waitUntil: 'networkidle2' });
 
-    // 2. 进入 VPS 详情页并点击更新
+    // 2. 进入续费页面
     await page.click('a[href^="/xapanel/xvps/server/detail?id="]');
     await page.waitForNavigation({ waitUntil: 'networkidle2' });
     await page.click('text=更新する');
     await page.waitForNavigation({ waitUntil: 'networkidle2' });
 
-    // 3. 图像验证码识别
+    // 3. 图形验证码
     const imgData = await page.$eval('img[src^="data:"]', img => img.src);
     const code = await fetch(
       'https://captcha-120546510085.asia-northeast1.run.app',
       { method: 'POST', body: imgData }
     ).then(r => r.text());
-    console.log('图像验证码：', code);
+    console.log('图形验证码识别：', code);
     await page.type('[placeholder="上の画像の数字を入力"]', code);
 
     // 4. Turnstile 自动验证
     const frameHandle = await page.$('iframe[src*="turnstile"]');
     if (frameHandle) {
-      console.log('检测到 Turnstile，开始自动验证…');
+      console.log('检测到 Turnstile，开始自动验证...');
       const frame = await frameHandle.contentFrame();
       if (!frame) throw new Error('无法获取 Turnstile iframe');
 
@@ -81,12 +84,9 @@ const solver = new TwoCaptcha.Solver(TWOCAPTCHA_KEY);
       const sitekey = sitekeyMatch[1];
 
       // 请求 2Captcha
-      const turnRes = await solver.turnstile({
-        pageurl: page.url(),
-        sitekey,
-      });
+      const turnRes = await solver.turnstile({ pageurl: page.url(), sitekey });
       const token = turnRes.data;
-      console.log('2Captcha 返回的 token：', token);
+      console.log('2Captcha Turnstile token:', token);
 
       // 注入 token 并触发回调
       await page.evaluate(t => {
@@ -105,22 +105,19 @@ const solver = new TwoCaptcha.Solver(TWOCAPTCHA_KEY);
         }
       }, token);
 
-      // 在 iframe 中点一下复选框，刷新 UI
+      // 在 iframe 内点击一下复选框，刷新 UI
       await frame.click('input[type="checkbox"]');
-      // 等待验证成功标志
-      await page.waitForSelector('#success[style*="display: flex"]', {
-        timeout: 30000,
-      });
+      await page.waitForSelector('#success[style*="display: flex"]', { timeout: 30000 });
       console.log('Turnstile 验证成功');
+    } else {
+      console.log('未检测到 Turnstile iframe，跳过验证');
     }
 
-    // 5. 点击“無料VPSの利用を継続する”
+    // 5. 点击续费按钮
     await page.click('text=無料VPSの利用を継続する');
 
-    // 6. 等待“受理成功”文字出现，确认续费已提交
-    await page.waitForSelector('text=申し込みを受け付けました', {
-      timeout: 30000,
-    });
+    // 6. 等待续费成功提示
+    await page.waitForSelector('text=申し込みを受け付けました', { timeout: 30000 });
     console.log('续费已受理 ✔️');
   } catch (err) {
     console.error('脚本出错:', err);
