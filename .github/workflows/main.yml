@@ -24,4 +24,6 @@ jobs:
           PROXY_SERVER: ${{ secrets.PROXY_SERVER }}
       - uses: actions/upload-artifact@v4
         with:
-          path: recording.webm
+          path: |
+               recording.webm
+               error.png
