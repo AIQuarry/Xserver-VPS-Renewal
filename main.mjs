@@ -1,6 +1,5 @@
 import puppeteer from 'puppeteer'
 import { setTimeout } from 'node:timers/promises'
-import fetch from 'node-fetch'
 
 const args = ['--no-sandbox', '--disable-setuid-sandbox']
 if (process.env.PROXY_SERVER) {
@@ -48,7 +47,7 @@ try {
 
         if (sitekey) {
             const url = page.url()
-            const apiKey = process.env.TWO_CAPTCHA_API_KEY
+            const apiKey = process.env.TWOCAPTCHA_KEY
             const res = await fetch(`http://2captcha.com/in.php?key=${apiKey}&method=turnstile&sitekey=${sitekey}&pageurl=${url}`)
             const text = await res.text()
             const [, captchaId] = text.split('|')
