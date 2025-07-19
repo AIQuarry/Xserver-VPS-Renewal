@@ -1,7 +1,6 @@
 import puppeteer from 'puppeteer'
 import { setTimeout } from 'node:timers/promises'
 
-
 const args = ['--no-sandbox', '--disable-setuid-sandbox']
 if (process.env.PROXY_SERVER) {
   const proxy_url = new URL(process.env.PROXY_SERVER)
@@ -41,6 +40,47 @@ async function solveTurnstileV2(sitekey, pageUrl) {
   throw new Error('Turnstile 验证超时')
 }
 
+// 检测Cloudflare验证状态
+async function checkCFVerification(page) {
+  try {
+    // 检查验证框是否成功显示
+    await page.waitForSelector('iframe[src*="challenges.cloudflare.com"]', { timeout: 5000 })
+    
+    // 检查成功标志
+    const isSuccess = await page.evaluate(() => {
+      const container = document.querySelector('.cf-turnstile');
+      return container && container.classList.contains('cf-turnstile-success');
+    });
+    
+    if (isSuccess) {
+      console.log('✅ Cloudflare验证已通过');
+      return true;
+    }
+    
+    // 检查错误标志
+    const isError = await page.evaluate(() => {
+      const container = document.querySelector('.cf-turnstile');
+      return container && container.classList.contains('cf-turnstile-error');
+    });
+    
+    if (isError) {
+      console.log('❌ Cloudflare验证失败');
+      return false;
+    }
+    
+    // 检查隐藏输入框是否有值
+    const hasToken = await page.evaluate(() => {
+      const input = document.querySelector('input[name="cf-turnstile-response"]');
+      return input && input.value.length > 10;
+    });
+    
+    return hasToken;
+  } catch (e) {
+    console.log('Cloudflare验证状态检测失败:', e.message);
+    return false;
+  }
+}
+
 try {
   if (process.env.PROXY_SERVER) {
     const { username, password } = new URL(process.env.PROXY_SERVER)
@@ -58,27 +98,79 @@ try {
   await page.locator('text=引き続き無料VPSの利用を継続する').click()
   await page.waitForNavigation({ waitUntil: 'networkidle2' })
 
-  // Turnstile 验证
-  console.log('frames:', page.frames().map(f => f.url()))
-  const cfFrame = page.frames().find(f =>
-    f.url().includes('challenges.cloudflare.com') &&
-    f.url().includes('/turnstile/if/')
-  )
-  if (cfFrame) {
-    const sitekey = (cfFrame.url().match(/\/([0-9A-Za-z]{20,})\//) || [])[1]
-    const token = await solveTurnstileV2(sitekey, page.url())
-    await page.evaluate(t => {
-      const inp = document.querySelector('input[name="cf-turnstile-response"]') ||
-          (() => {
-            const i = document.createElement('input')
-            i.type = 'hidden'; i.name = 'cf-turnstile-response'
-            document.forms[0].appendChild(i)
-            return i
-          })()
-      inp.value = t
-      document.forms[0].submit()
-    }, token)
-    await page.waitForNavigation({ waitUntil: 'networkidle2' })
+  // Turnstile 验证 (带重试机制)
+  let cfVerified = false;
+  let retryCount = 0;
+  
+  while (!cfVerified && retryCount < 3) {
+    console.log(`尝试Cloudflare验证 (第 ${retryCount + 1} 次)`);
+    const cfFrame = page.frames().find(f =>
+      f.url().includes('challenges.cloudflare.com') &&
+      f.url().includes('/turnstile/if/')
+    )
+    
+    if (cfFrame) {
+      const sitekey = (cfFrame.url().match(/\/([0-9A-Za-z]{20,})\//) || [])[1]
+      const token = await solveTurnstileV2(sitekey, page.url())
+      
+      await page.evaluate(t => {
+        // 尝试找到现有输入框或创建新输入框
+        let inp = document.querySelector('input[name="cf-turnstile-response"]');
+        if (!inp) {
+          inp = document.createElement('input');
+          inp.type = 'hidden';
+          inp.name = 'cf-turnstile-response';
+          document.forms[0].appendChild(inp);
+        }
+        inp.value = t;
+        
+        // 尝试触发验证成功事件
+        const event = new Event('cf-turnstile-success', { bubbles: true });
+        inp.dispatchEvent(event);
+        
+        // 尝试更新验证框状态
+        const container = document.querySelector('.cf-turnstile');
+        if (container) {
+          container.classList.add('cf-turnstile-success');
+          container.classList.remove('cf-turnstile-error');
+        }
+      }, token);
+      
+      // 等待可能的页面更新
+      await setTimeout(3000);
+      
+      // 检查验证是否真正通过
+      cfVerified = await checkCFVerification(page);
+      
+      if (!cfVerified) {
+        console.log('Cloudflare验证未通过，准备重试...');
+        // 刷新验证框
+        await page.evaluate(() => {
+          const container = document.querySelector('.cf-turnstile');
+          if (container) {
+            container.innerHTML = ''; // 清空容器
+            if (window.turnstile) {
+              window.turnstile.render(container, {
+                sitekey: container.dataset.sitekey,
+                callback: function(token) {
+                  document.querySelector('input[name="cf-turnstile-response"]').value = token;
+                }
+              });
+            }
+          }
+        });
+      }
+    } else {
+      console.log('未找到Cloudflare验证框，可能不需要验证');
+      cfVerified = true; // 没有验证框也算通过
+    }
+    
+    retryCount++;
+    if (!cfVerified && retryCount < 3) await setTimeout(2000); // 重试前等待
+  }
+  
+  if (!cfVerified) {
+    throw new Error('Cloudflare验证失败，重试次数用尽');
   }
 
   // 图像验证码（使用原本验证码服务）
@@ -90,19 +182,39 @@ try {
   console.log('图形验证码结果:', code)
   await page.locator('[placeholder="上の画像の数字を入力"]').fill(code)
 
-  // 点击续订按钮
-  const btn = await page.waitForSelector('text=無料VPSの利用を継続する', { timeout: 30000 })
-  await btn.click()
-  console.log('✅ 续订提交成功')
+  // 点击续订按钮（带状态检测）
+  const btn = await page.waitForSelector('text=無料VPSの利用を継続する', { timeout: 30000, visible: true }).catch(() => null)
+  
+  if (!btn) {
+    throw new Error('无法找到续费按钮');
+  }
+  
+  // 检查按钮是否可用
+  const isDisabled = await btn.evaluate(b => b.disabled);
+  if (isDisabled) {
+    throw new Error('续费按钮处于禁用状态');
+  }
+  
+  await btn.click();
+  console.log('✅ 续费按钮点击成功');
+  
+  // 检查操作结果
+  await page.waitForSelector('.alert-success, #success-message', { timeout: 10000 }).catch(() => {
+    throw new Error('续费操作完成，但未检测到成功提示');
+  });
+  
+  console.log('✅ 续费操作成功确认');
+  
+  // 等待5秒确保页面稳定
+  console.log('等待5秒确保页面稳定...');
+  await setTimeout(5000);
 
 } catch (e) {
   console.error('❌ 发生错误:', e)
   await page.screenshot({ path: 'failure.png', fullPage: true })
   console.log('📸 已保存失败截图：failure.png')
+  throw e // 重新抛出错误以便外部处理
 } finally {
-  // 确保等待5秒后才停止录制和关闭浏览器
-  console.log('等待5秒确保录制完整...')
-  await setTimeout(5000)
   await recorder.stop()
   await browser.close()
 }
