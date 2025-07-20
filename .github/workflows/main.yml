@@ -22,11 +22,7 @@ jobs:
           echo "Allow 127.0.0.1" | sudo tee -a /etc/tinyproxy/tinyproxy.conf
           echo "BasicAuth ${{ secrets.PROXY_USER }} ${{ secrets.PROXY_PASS }}" | sudo tee -a /etc/tinyproxy/tinyproxy.conf
           echo "Timeout 600" | sudo tee -a /etc/tinyproxy/tinyproxy.conf
-          
-      - name: Start TinyProxy
-        run: |
-          sudo systemctl restart tinyproxy
-          sudo systemctl status tinyproxy
+
       - run: node main.mjs
         env:
           EMAIL: ${{ secrets.EMAIL }}
