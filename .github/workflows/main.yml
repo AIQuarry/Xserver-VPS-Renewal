@@ -12,10 +12,21 @@ jobs:
       - uses: actions/checkout@v3
       - uses: actions/setup-node@v4
       - run: sudo apt-get update
+      - run: sudo apt-get install -y tinyproxy
       - run: sudo apt-get install -y libgbm-dev libasound2-dev
       - run: sudo apt-get -qq update && sudo apt-get -yqq install --no-install-recommends ffmpeg fonts-noto-cjk
       - run: yarn add puppeteer
       - run: yarn add 2captcha
+      - name: Configure TinyProxy
+        run: |
+          echo "Allow 127.0.0.1" | sudo tee -a /etc/tinyproxy/tinyproxy.conf
+          echo "BasicAuth ${{ secrets.PROXY_USER }} ${{ secrets.PROXY_PASS }}" | sudo tee -a /etc/tinyproxy/tinyproxy.conf
+          echo "Timeout 600" | sudo tee -a /etc/tinyproxy/tinyproxy.conf
+          
+      - name: Start TinyProxy
+        run: |
+          sudo systemctl restart tinyproxy
+          sudo systemctl status tinyproxy
       - run: node main.mjs
         env:
           EMAIL: ${{ secrets.EMAIL }}
