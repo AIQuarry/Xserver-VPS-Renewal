@@ -188,21 +188,6 @@ async function main() {
             console.log('未找到图形验证码。');
         }
 
-        // 3. 勾选确认复选框 (已修复 - 使用 XPath)
-        console.log('正在通过 XPath 查找并点击“确认是人类”复选框...');
-        const checkboxXpath = '//label[.//span[text()="人間であることを確認します"]]';
-        const checkboxHandles = await page.$x(checkboxXpath);
-
-        if (checkboxHandles.length > 0) {
-            await checkboxHandles[0].click();
-            console.log('复选框已成功点击。');
-        } else {
-            console.log('未找到“确认是人类”复选框。');
-        }
-
-        // 在最终提交前增加一个短暂的延时，给页面脚本留出反应时间
-        console.log('等待2秒以确保所有验证脚本执行完毕...');
-        await delay(2000);
 
         console.log('所有验证码处理完毕，正在提交续订...');
         await page.locator('text=無料VPSの利用を継続する').click();
