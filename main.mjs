@@ -23,7 +23,7 @@ async function pollFor2CaptchaResult(captchaId) {
             const result = await resultResponse.json();
 
             if (result.status === 1) {
-                console.log(`解决成功！结果: ${result.request.substring(0, 30)}...`);
+                console.log(`2Captcha 解决成功！结果: ${result.request.substring(0, 30)}...`);
                 return result.request;
             }
 
@@ -31,7 +31,7 @@ async function pollFor2CaptchaResult(captchaId) {
                 throw new Error(`在 2Captcha 解决过程中发生错误: ${result.request}`);
             }
 
-            console.log('验证码尚未解决，10秒后重试...');
+            console.log('2Captcha 验证码尚未解决，10秒后重试...');
             await delay(10000);
         } catch (error) {
             console.error("轮询 2Captcha 结果时发生网络错误:", error);
@@ -39,31 +39,6 @@ async function pollFor2CaptchaResult(captchaId) {
         }
     }
 }
-
-/**
- * 使用 2Captcha 解决 Base64 图片验证码
- * @param {string} base64Image - 包含 data:image/... 前缀的 Base64 编码图片字符串
- * @returns {Promise<string>} - 识别出的验证码文本
- */
-async function solveImageCaptcha(base64Image) {
-    console.log('正在向 2Captcha 请求解决图片验证码...');
-    const sendResponse = await fetch('https://2captcha.com/in.php', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            key: TWOCAPTCHA_API_KEY,
-            method: 'base64',
-            body: base64Image.split(',')[1], // 仅发送 Base64 数据部分
-            json: 1
-        })
-    });
-    const sendResult = await sendResponse.json();
-    if (sendResult.status !== 1) {
-        throw new Error(`向 2Captcha 发送图片验证码失败: ${sendResult.request}`);
-    }
-    return pollFor2CaptchaResult(sendResult.request);
-}
-
 
 /**
  * 使用 2Captcha 解决 Cloudflare Turnstile
@@ -149,12 +124,25 @@ async function main() {
         console.log('已点击“继续使用免费VPS”');
         
         await page.waitForNavigation({ waitUntil: 'networkidle2' });
-        console.log('已到达最终确认页面，正在检测验证码类型...');
+        console.log('已到达最终确认页面，正在处理验证码...');
 
-        // --- 智能验证码检测与处理 ---
-        const turnstileElement = await page.$('div.cf-turnstile');
+        // --- 验证码处理逻辑（按顺序处理） ---
+
+        // 1. 处理图形验证码 (使用您指定的API)
         const imageCaptchaElement = await page.$('img[src^="data:"]');
+        if (imageCaptchaElement) {
+            console.log('检测到图形验证码，正在使用您的API处理...');
+            const body = await imageCaptchaElement.evaluate(img => img.src);
+            const code = await fetch('https://captcha-120546510085.asia-northeast1.run.app', { method: 'POST', body }).then(r => r.text());
+            console.log(`图形验证码识别结果: ${code}`);
+            await page.locator('[placeholder="上の画像の数字を入力"]').fill(code);
+            console.log('图形验证码已填写。');
+        } else {
+            console.log('未找到图形验证码。');
+        }
 
+        // 2. 处理 Cloudflare Turnstile (使用 2Captcha)
+        const turnstileElement = await page.$('div.cf-turnstile');
         if (turnstileElement) {
             console.log('检测到 Cloudflare Turnstile，正在处理...');
             const sitekey = await turnstileElement.evaluate(el => el.getAttribute('data-sitekey'));
@@ -163,24 +151,21 @@ async function main() {
             
             console.log('正在将 Turnstile 令牌注入页面...');
             await page.evaluate((tokenValue) => {
-                document.querySelector('[name="cf-turnstile-response"]').value = tokenValue;
+                const responseElement = document.querySelector('[name="cf-turnstile-response"]');
+                if (responseElement) {
+                    responseElement.value = tokenValue;
+                }
                 const callbackName = document.querySelector('.cf-turnstile')?.dataset.callback;
                 if (callbackName && typeof window[callbackName] === 'function') {
                     window[callbackName](tokenValue);
                 }
             }, token);
-
-        } else if (imageCaptchaElement) {
-            console.log('检测到图片验证码，正在处理...');
-            const imageBase64 = await imageCaptchaElement.evaluate(img => img.src);
-            const captchaCode = await solveImageCaptcha(imageBase64);
-            await page.locator('[placeholder="上の画像の数字を入力"]').fill(captchaCode);
-        
+            console.log('Turnstile 令牌已注入。');
         } else {
-            console.log('未在页面上检测到已知类型的验证码，将直接尝试提交。');
+            console.log('未找到 Cloudflare Turnstile。');
         }
 
-        console.log('验证码处理完毕，正在提交续订...');
+        console.log('所有验证码处理完毕，正在提交续订...');
         await page.locator('text=無料VPSの利用を継続する').click();
         await page.waitForNavigation({ waitUntil: 'networkidle2' });
 
