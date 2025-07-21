@@ -15,7 +15,7 @@ jobs:
       - run: sudo apt-get install -y tinyproxy
       - run: sudo apt-get install -y libgbm-dev libasound2-dev
       - run: sudo apt-get -qq update && sudo apt-get -yqq install --no-install-recommends ffmpeg fonts-noto-cjk
-      - run: yarn add puppeteer
+      - run: yarn add puppeteer-extra puppeteer-extra-plugin-stealth
       - run: yarn add 2captcha
 
 
