@@ -188,14 +188,21 @@ async function main() {
             console.log('未找到图形验证码。');
         }
 
-        // 3. 点击确认复选框
-        const checkboxSelector = 'label:has-text("人間であることを確認します")';
-        const checkboxHandle = await page.$(checkboxSelector); // 使用 page.$ 查找元素
-        if (checkboxHandle) { // 检查元素是否存在
-            console.log('检测到“确认是人类”复选框，正在点击...');
-            await checkboxHandle.click(); // 直接点击找到的元素
-            console.log('复选框已点击。');
-        } else {
+        // 3. 点击确认复选框 (已修复 - 使用替代方法)
+        console.log('正在查找“确认是人类”复选框...');
+        const labels = await page.$$('label');
+        let checkboxClicked = false;
+        for (const label of labels) {
+            const labelText = await page.evaluate(el => el.textContent, label);
+            if (labelText && labelText.includes('人間であることを確認します')) {
+                console.log('检测到复选框，正在点击...');
+                await label.click();
+                checkboxClicked = true;
+                console.log('复选框已点击。');
+                break;
+            }
+        }
+        if (!checkboxClicked) {
             console.log('未找到“确认是人类”复选框。');
         }
 
