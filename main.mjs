@@ -189,10 +189,11 @@ async function main() {
         }
 
         // 3. 点击确认复选框
-        const checkboxLocator = page.locator('label:has-text("人間であることを確認します")');
-        if (await checkboxLocator.count() > 0) {
+        const checkboxSelector = 'label:has-text("人間であることを確認します")';
+        const checkboxHandle = await page.$(checkboxSelector); // 使用 page.$ 查找元素
+        if (checkboxHandle) { // 检查元素是否存在
             console.log('检测到“确认是人类”复选框，正在点击...');
-            await checkboxLocator.click();
+            await checkboxHandle.click(); // 直接点击找到的元素
             console.log('复选框已点击。');
         } else {
             console.log('未找到“确认是人类”复选框。');
