@@ -93,7 +93,7 @@ async function main() {
     const page = (await browser.pages())[0];
     const userAgent = await browser.userAgent();
     await page.setUserAgent(userAgent.replace('Headless', ''));
-    // const recorder = await page.screencast({ path: 'recording.webm' }); // 如需录制，取消此行注释
+    const recorder = await page.screencast({ path: 'recording.webm' }); // 启用屏幕录制
 
     try {
         if (process.env.PROXY_SERVER) {
@@ -181,7 +181,7 @@ async function main() {
         console.error('脚本执行过程中发生错误:', e);
         await page.screenshot({ path: 'error.png' });
     } finally {
-        // await recorder.stop(); // 如需录制，取消此行注释
+        await recorder.stop(); // 停止录制并保存文件
         console.log('任务完成，5秒后将关闭浏览器...');
         await delay(5000);
         await browser.close();
