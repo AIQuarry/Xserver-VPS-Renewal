@@ -1,9 +1,12 @@
-import puppeteer from 'puppeteer';
+import puppeteer from 'puppeteer-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { setTimeout as delay } from 'node:timers/promises';
+
+// 应用 Stealth 插件以规避反机器人检测
+puppeteer.use(StealthPlugin());
 
 // --- 2Captcha 配置 ---
 // 从环境变量读取API密钥。
-// 运行前请先设置: export TWOCAPTCHA_API_KEY='YOUR_API_KEY'
 const TWOCAPTCHA_API_KEY = process.env.TWOCAPTCHA_API_KEY;
 
 /**
@@ -188,6 +191,22 @@ async function main() {
             console.log('未找到图形验证码。');
         }
 
+        // 3. 勾选确认复选框 (使用 XPath)
+        console.log('正在通过 XPath 查找并点击“确认是人类”复选框...');
+        // Puppeteer v19+ a `page.$x` n'est plus disponible.
+        // Utilisez `page.evaluate` avec `document.evaluate` ou un sélecteur CSS/texte plus simple.
+        // Pour des raisons de compatibilité, nous utiliserons `page.locator` avec un préfixe xpath.
+        const checkboxLocator = page.locator('xpath/.' + '//label[.//span[text()="人間であることを確認します"]]');
+        if (await checkboxLocator.count() > 0) {
+             await checkboxLocator.click();
+             console.log('复选框已成功点击。');
+        } else {
+            console.log('未找到“确认是人类”复选框。');
+        }
+        
+        // 在最终提交前增加一个短暂的延时，给页面脚本留出反应时间
+        console.log('等待2秒以确保所有验证脚本执行完毕...');
+        await delay(2000);
 
         console.log('所有验证码处理完毕，正在提交续订...');
         await page.locator('text=無料VPSの利用を継続する').click();
