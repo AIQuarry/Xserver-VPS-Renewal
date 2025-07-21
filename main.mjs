@@ -188,21 +188,27 @@ async function main() {
             console.log('未找到图形验证码。');
         }
 
-        // 3. 点击确认复选框 (已修复 - 使用替代方法)
-        console.log('正在查找“确认是人类”复选框...');
-        const labels = await page.$$('label');
-        let checkboxClicked = false;
-        for (const label of labels) {
-            const labelText = await page.evaluate(el => el.textContent, label);
-            if (labelText && labelText.includes('人間であることを確認します')) {
-                console.log('检测到复选框，正在点击...');
-                await label.click();
-                checkboxClicked = true;
-                console.log('复选框已点击。');
-                break;
+        // 3. 勾选确认复选框 (已修复 - 使用更可靠的方法)
+        console.log('正在查找并勾选“确认是人类”复选框...');
+        const checkboxChecked = await page.evaluate(() => {
+            const labels = Array.from(document.querySelectorAll('label'));
+            for (const label of labels) {
+                if (label.textContent && label.textContent.includes('人間であることを確認します')) {
+                    const input = label.querySelector('input[type="checkbox"]');
+                    if (input) {
+                        input.checked = true;
+                        // 手动触发 change 事件, 因为通过脚本设置 .checked 不会触发它
+                        input.dispatchEvent(new Event('change', { bubbles: true }));
+                        return true;
+                    }
+                }
             }
-        }
-        if (!checkboxClicked) {
+            return false;
+        });
+
+        if (checkboxChecked) {
+            console.log('复选框已成功勾选。');
+        } else {
             console.log('未找到“确认是人类”复选框。');
         }
 
