@@ -30,7 +30,7 @@ async function pollFor2CaptchaResult(captchaId) {
                 return result.request;
             }
 
-            if (result.request !== 'CAPCHA_NOT_READY') {
+            if (result.request!== 'CAPCHA_NOT_READY') {
                 throw new Error(`在 2Captcha 解决过程中发生错误: ${result.request}`);
             }
 
@@ -75,7 +75,7 @@ async function solveTurnstile(sitekey, pageUrl, action, cdata) {
         body: JSON.stringify(payload)
     });
     const sendResult = await sendResponse.json();
-    if (sendResult.status !== 1) {
+    if (sendResult.status!== 1) {
         throw new Error(`向 2Captcha 发送 Turnstile 请求失败: ${sendResult.request}`);
     }
     return pollFor2CaptchaResult(sendResult.request);
@@ -86,7 +86,7 @@ async function solveTurnstile(sitekey, pageUrl, action, cdata) {
  */
 async function main() {
     // 检查必要的环境变量
-    if (!TWOCAPTCHA_API_KEY || !process.env.EMAIL || !process.env.PASSWORD) {
+    if (!TWOCAPTCHA_API_KEY ||!process.env.EMAIL ||!process.env.PASSWORD) {
         console.error('错误: 请确保设置了 TWOCAPTCHA_API_KEY, EMAIL, 和 PASSWORD 环境变量。');
         process.exit(1);
     }
@@ -108,7 +108,7 @@ async function main() {
         headless: 'new' // 在无图形界面的服务器环境中，必须使用无头模式
     });
 
-    const page = (await browser.pages())[0];
+    const page = (await browser.pages());
     
     // --- 如果提供了用户名和密码，则进行代理身份验证 ---
     if (process.env.PROXY_SERVER && process.env.PROXY_USERNAME && process.env.PROXY_PASSWORD) {
@@ -191,15 +191,14 @@ async function main() {
             console.log('未找到图形验证码。');
         }
 
-        // 3. 勾选确认复选框 (使用 XPath)
-        console.log('正在通过 XPath 查找并点击“确认是人类”复选框...');
-        // Puppeteer v19+ a `page.$x` n'est plus disponible.
-        // Utilisez `page.evaluate` avec `document.evaluate` ou un sélecteur CSS/texte plus simple.
-        // Pour des raisons de compatibilité, nous utiliserons `page.locator` avec un préfixe xpath.
-        const checkboxLocator = page.locator('xpath/.' + '//label[.//span[text()="人間であることを確認します"]]');
-        if (await checkboxLocator.count() > 0) {
-             await checkboxLocator.click();
-             console.log('复选框已成功点击。');
+        // 3. 勾选确认复选框 (已修复 - 使用现代选择器语法)
+        console.log('正在查找并点击“确认是人类”复选框...');
+        const checkboxSelector = '::-p-xpath(//label[.//span[text()="人間であることを確認します"]])';
+        const checkboxHandle = await page.$(checkboxSelector);
+
+        if (checkboxHandle) {
+            await checkboxHandle.click();
+            console.log('复选框已成功点击。');
         } else {
             console.log('未找到“确认是人类”复选框。');
         }
