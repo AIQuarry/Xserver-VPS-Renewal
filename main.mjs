@@ -112,7 +112,7 @@ async function main() {
     const browser = await puppeteer.launch({
         defaultViewport: { width: 1080, height: 1024 },
         args,
-        headless: false // 设置为 false 以便观察
+        headless: 'new' // 在无图形界面的服务器环境中，必须使用无头模式
     });
 
     const page = (await browser.pages())[0];
