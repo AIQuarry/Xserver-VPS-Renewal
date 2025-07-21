@@ -44,20 +44,32 @@ async function pollFor2CaptchaResult(captchaId) {
  * 使用 2Captcha 解决 Cloudflare Turnstile
  * @param {string} sitekey - 从页面HTML中获取的 data-sitekey
  * @param {string} pageUrl - 出现 Turnstile 的页面的完整URL
+ * @param {string} action - (可选) 从 data-action 属性获取的值
+ * @param {string} cdata - (可选) 从 data-cdata 属性获取的值
  * @returns {Promise<string>} - 解决后的 Turnstile 令牌
  */
-async function solveTurnstile(sitekey, pageUrl) {
+async function solveTurnstile(sitekey, pageUrl, action, cdata) {
     console.log('正在向 2Captcha 请求解决 Turnstile...');
+    const payload = {
+        key: TWOCAPTCHA_API_KEY,
+        method: 'turnstile',
+        sitekey: sitekey,
+        pageurl: pageUrl,
+        json: 1
+    };
+    if (action) {
+        payload.action = action;
+        console.log(`包含 action: ${action}`);
+    }
+    if (cdata) {
+        payload.cdata = cdata;
+        console.log(`包含 cdata: ${cdata}`);
+    }
+
     const sendResponse = await fetch('https://2captcha.com/in.php', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            key: TWOCAPTCHA_API_KEY,
-            method: 'turnstile',
-            sitekey: sitekey,
-            pageurl: pageUrl,
-            json: 1
-        })
+        body: JSON.stringify(payload)
     });
     const sendResult = await sendResponse.json();
     if (sendResult.status !== 1) {
@@ -138,9 +150,14 @@ async function main() {
         const turnstileElement = await page.$('div.cf-turnstile');
         if (turnstileElement) {
             console.log('检测到 Cloudflare Turnstile，正在处理...');
-            const sitekey = await turnstileElement.evaluate(el => el.getAttribute('data-sitekey'));
+            const turnstileDetails = await turnstileElement.evaluate(el => ({
+                sitekey: el.getAttribute('data-sitekey'),
+                action: el.getAttribute('data-action'),
+                cdata: el.getAttribute('data-cdata'),
+            }));
+            
             const pageUrl = page.url();
-            const token = await solveTurnstile(sitekey, pageUrl);
+            const token = await solveTurnstile(turnstileDetails.sitekey, pageUrl, turnstileDetails.action, turnstileDetails.cdata);
             
             console.log('正在将 Turnstile 令牌注入页面...');
             await page.evaluate((tokenValue) => {
@@ -169,6 +186,16 @@ async function main() {
             console.log('图形验证码已填写。');
         } else {
             console.log('未找到图形验证码。');
+        }
+
+        // 3. 点击确认复选框
+        const checkboxLocator = page.locator('label:has-text("人間であることを確認します")');
+        if (await checkboxLocator.count() > 0) {
+            console.log('检测到“确认是人类”复选框，正在点击...');
+            await checkboxLocator.click();
+            console.log('复选框已点击。');
+        } else {
+            console.log('未找到“确认是人类”复选框。');
         }
 
 
