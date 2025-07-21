@@ -134,32 +134,28 @@ async function main() {
 
         // --- 验证码处理逻辑 ---
 
-        // 1. 循环处理 Cloudflare Turnstile (使用 2Captcha)
-        while (true) {
-            const turnstileElement = await page.$('div.cf-turnstile');
-            if (turnstileElement) {
-                console.log('检测到 Cloudflare Turnstile，正在处理...');
-                const sitekey = await turnstileElement.evaluate(el => el.getAttribute('data-sitekey'));
-                const pageUrl = page.url();
-                const token = await solveTurnstile(sitekey, pageUrl);
-                
-                console.log('正在将 Turnstile 令牌注入页面...');
-                await page.evaluate((tokenValue) => {
-                    const responseElement = document.querySelector('[name="cf-turnstile-response"]');
-                    if (responseElement) {
-                        responseElement.value = tokenValue;
-                    }
-                    const callbackName = document.querySelector('.cf-turnstile')?.dataset.callback;
-                    if (callbackName && typeof window[callbackName] === 'function') {
-                        window[callbackName](tokenValue);
-                    }
-                }, token);
-                console.log('Turnstile 令牌已注入。等待3秒让页面反应...');
-                await delay(3000); // 等待页面可能发生的动态变化
-            } else {
-                console.log('未再检测到 Cloudflare Turnstile，继续下一步。');
-                break; // 如果找不到CF验证，则退出循环
-            }
+        // 1. 处理 Cloudflare Turnstile (使用 2Captcha)
+        const turnstileElement = await page.$('div.cf-turnstile');
+        if (turnstileElement) {
+            console.log('检测到 Cloudflare Turnstile，正在处理...');
+            const sitekey = await turnstileElement.evaluate(el => el.getAttribute('data-sitekey'));
+            const pageUrl = page.url();
+            const token = await solveTurnstile(sitekey, pageUrl);
+            
+            console.log('正在将 Turnstile 令牌注入页面...');
+            await page.evaluate((tokenValue) => {
+                const responseElement = document.querySelector('[name="cf-turnstile-response"]');
+                if (responseElement) {
+                    responseElement.value = tokenValue;
+                }
+                const callbackName = document.querySelector('.cf-turnstile')?.dataset.callback;
+                if (callbackName && typeof window[callbackName] === 'function') {
+                    window[callbackName](tokenValue);
+                }
+            }, token);
+            console.log('Turnstile 令牌已注入。');
+        } else {
+            console.log('未检测到 Cloudflare Turnstile。');
         }
 
         // 2. 接着处理图形验证码 (使用您指定的API)
