@@ -9,7 +9,7 @@ const TWOCAPTCHA_API_KEY = process.env.TWOCAPTCHA_API_KEY;
 /**
  * 轮询查询 2Captcha API 获取已解决的结果
  * @param {string} captchaId - 从 /in.php 获取的验证码任务ID
- * @returns {Promise<string>} - 解决后的令牌 (token)
+ * @returns {Promise<string>} - 解决后的令牌 (token) 或验证码文本
  */
 async function pollFor2CaptchaResult(captchaId) {
     console.log(`已将任务提交至 2Captcha, ID: ${captchaId}。正在等待服务器处理...`);
@@ -23,26 +23,47 @@ async function pollFor2CaptchaResult(captchaId) {
             const result = await resultResponse.json();
 
             if (result.status === 1) {
-                // 成功
-                console.log(`解决成功！令牌: ${result.request.substring(0, 30)}...`);
+                console.log(`解决成功！结果: ${result.request.substring(0, 30)}...`);
                 return result.request;
             }
 
             if (result.request !== 'CAPCHA_NOT_READY') {
-                // 如果返回的不是“尚未准备好”，则说明是其他错误
                 throw new Error(`在 2Captcha 解决过程中发生错误: ${result.request}`);
             }
 
-            // 验证码尚未解决
             console.log('验证码尚未解决，10秒后重试...');
-            await delay(10000); // 每10秒查询一次
+            await delay(10000);
         } catch (error) {
             console.error("轮询 2Captcha 结果时发生网络错误:", error);
-            // 发生错误时也等待后重试
             await delay(10000);
         }
     }
 }
+
+/**
+ * 使用 2Captcha 解决 Base64 图片验证码
+ * @param {string} base64Image - 包含 data:image/... 前缀的 Base64 编码图片字符串
+ * @returns {Promise<string>} - 识别出的验证码文本
+ */
+async function solveImageCaptcha(base64Image) {
+    console.log('正在向 2Captcha 请求解决图片验证码...');
+    const sendResponse = await fetch('https://2captcha.com/in.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            key: TWOCAPTCHA_API_KEY,
+            method: 'base64',
+            body: base64Image.split(',')[1], // 仅发送 Base64 数据部分
+            json: 1
+        })
+    });
+    const sendResult = await sendResponse.json();
+    if (sendResult.status !== 1) {
+        throw new Error(`向 2Captcha 发送图片验证码失败: ${sendResult.request}`);
+    }
+    return pollFor2CaptchaResult(sendResult.request);
+}
+
 
 /**
  * 使用 2Captcha 解决 Cloudflare Turnstile
@@ -60,15 +81,13 @@ async function solveTurnstile(sitekey, pageUrl) {
             method: 'turnstile',
             sitekey: sitekey,
             pageurl: pageUrl,
-            json: 1 // 以JSON格式接收响应
+            json: 1
         })
     });
     const sendResult = await sendResponse.json();
     if (sendResult.status !== 1) {
-        throw new Error(`向 2Captcha 发送请求失败: ${sendResult.request}`);
+        throw new Error(`向 2Captcha 发送 Turnstile 请求失败: ${sendResult.request}`);
     }
-
-    // 调用轮询函数等待结果
     return pollFor2CaptchaResult(sendResult.request);
 }
 
@@ -76,93 +95,112 @@ async function solveTurnstile(sitekey, pageUrl) {
  * 主执行函数
  */
 async function main() {
-    // 检查API密钥是否存在
-    if (!TWOCAPTCHA_API_KEY) {
-        console.error('错误: 环境变量 TWOCAPTCHA_API_KEY 未设置。');
+    // 检查必要的环境变量
+    if (!TWOCAPTCHA_API_KEY || !process.env.EMAIL || !process.env.PASSWORD) {
+        console.error('错误: 请确保设置了 TWOCAPTCHA_API_KEY, EMAIL, 和 PASSWORD 环境变量。');
         process.exit(1);
     }
 
-    // 从命令行参数获取URL
-    const targetUrl = process.argv[2];
-    if (!targetUrl) {
-        console.error('错误: 请提供需要解决的目标URL作为命令行参数。');
-        console.log('用法: node solve_turnstile.js "https://example.com/login"');
-        process.exit(1);
+    const args = ['--no-sandbox', '--disable-setuid-sandbox'];
+    if (process.env.PROXY_SERVER) {
+        const proxy_url = new URL(process.env.PROXY_SERVER);
+        proxy_url.username = '';
+        proxy_url.password = '';
+        args.push(`--proxy-server=${proxy_url.toString().replace(/\/$/, '')}`);
     }
 
-    console.log(`正在启动浏览器...`);
-    // 设置 headless: false 可以在运行时显示浏览器窗口
-    const browser = await puppeteer.launch({ headless: false });
-    const page = await browser.newPage();
+    const browser = await puppeteer.launch({
+        defaultViewport: { width: 1080, height: 1024 },
+        args,
+        headless: false // 设置为 false 以便观察
+    });
+
+    const page = (await browser.pages())[0];
+    const userAgent = await browser.userAgent();
+    await page.setUserAgent(userAgent.replace('Headless', ''));
+    // const recorder = await page.screencast({ path: 'recording.webm' }); // 如需录制，取消此行注释
 
     try {
-        console.log(`正在导航至: ${targetUrl}`);
-        await page.goto(targetUrl, { waitUntil: 'networkidle2' });
-
-        console.log('正在查找 Cloudflare Turnstile 元素...');
-        // 等待 Turnstile 的 div 元素出现，最长等待30秒
-        const turnstileElement = await page.waitForSelector('div.cf-turnstile', { timeout: 30000 });
-
-        if (!turnstileElement) {
-            throw new Error('在此页面上未找到 Cloudflare Turnstile。');
-        }
-        
-        console.log('已找到 Turnstile，正在获取 sitekey...');
-        const sitekey = await turnstileElement.evaluate(el => el.getAttribute('data-sitekey'));
-        if (!sitekey) {
-            throw new Error('获取 data-sitekey 属性失败。');
-        }
-        console.log(`Sitekey: ${sitekey}`);
-
-        // 使用 2Captcha 解决 Turnstile
-        const token = await solveTurnstile(sitekey, targetUrl);
-
-        console.log('正在将获取到的令牌注入页面...');
-        // 在页面浏览器环境内执行脚本
-        await page.evaluate((tokenValue) => {
-            // 找到 Turnstile 用于存放响应的隐藏输入框
-            const responseElement = document.querySelector('[name="cf-turnstile-response"]');
-            if (responseElement) {
-                responseElement.value = tokenValue;
+        if (process.env.PROXY_SERVER) {
+            const { username, password } = new URL(process.env.PROXY_SERVER);
+            if (username && password) {
+                await page.authenticate({ username, password });
             }
-
-            // 执行 data-callback 指定的回调函数
-            const callbackName = document.querySelector('.cf-turnstile')?.dataset.callback;
-            if (callbackName && typeof window[callbackName] === 'function') {
-                console.log(`正在执行回调函数 '${callbackName}'...`);
-                window[callbackName](tokenValue);
-            }
-        }, token);
-
-        console.log('Turnstile 解决和令牌注入完成。');
-        
-        // --- 新增：自动点击提交按钮 ---
-        try {
-            console.log('正在尝试点击提交按钮...');
-            // 尝试点击常见的提交按钮，例如 <button type="submit">
-            const submitButton = await page.waitForSelector('button[type="submit"]', { timeout: 5000 });
-            await submitButton.click();
-            console.log('提交按钮已点击，等待页面导航...');
-            await page.waitForNavigation({ waitUntil: 'networkidle2' });
-        } catch (error) {
-            console.log('未找到提交按钮或点击后没有发生页面导航，脚本将继续。');
         }
-        
-        console.log('后续操作已完成。');
 
-        await page.screenshot({ path: 'turnstile_solved_final.png' });
-        console.log('已将最终页面的截图保存为 `turnstile_solved_final.png`。');
+        console.log('正在访问登录页面...');
+        await page.goto('https://secure.xserver.ne.jp/xapanel/login/xvps/', { waitUntil: 'networkidle2' });
+        
+        console.log('正在填写登录信息...');
+        await page.locator('#memberid').fill(process.env.EMAIL);
+        await page.locator('#user_password').fill(process.env.PASSWORD);
+        await page.locator('text=ログインする').click();
+        
+        await page.waitForNavigation({ waitUntil: 'networkidle2' });
+        console.log('登录成功，正在导航至服务器详情页...');
+        await page.locator('a[href^="/xapanel/xvps/server/detail?id="]').click();
+        
+        await page.waitForSelector('text=更新する');
+        await page.locator('text=更新する').click();
+        console.log('已点击“更新”按钮');
+
+        await page.waitForSelector('text=引き続き無料VPSの利用を継続する');
+        await page.locator('text=引き続き無料VPSの利用を継続する').click();
+        console.log('已点击“继续使用免费VPS”');
+        
+        await page.waitForNavigation({ waitUntil: 'networkidle2' });
+        console.log('已到达最终确认页面，正在检测验证码类型...');
+
+        // --- 智能验证码检测与处理 ---
+        const turnstileElement = await page.$('div.cf-turnstile');
+        const imageCaptchaElement = await page.$('img[src^="data:"]');
+
+        if (turnstileElement) {
+            console.log('检测到 Cloudflare Turnstile，正在处理...');
+            const sitekey = await turnstileElement.evaluate(el => el.getAttribute('data-sitekey'));
+            const pageUrl = page.url();
+            const token = await solveTurnstile(sitekey, pageUrl);
+            
+            console.log('正在将 Turnstile 令牌注入页面...');
+            await page.evaluate((tokenValue) => {
+                document.querySelector('[name="cf-turnstile-response"]').value = tokenValue;
+                const callbackName = document.querySelector('.cf-turnstile')?.dataset.callback;
+                if (callbackName && typeof window[callbackName] === 'function') {
+                    window[callbackName](tokenValue);
+                }
+            }, token);
+
+        } else if (imageCaptchaElement) {
+            console.log('检测到图片验证码，正在处理...');
+            const imageBase64 = await imageCaptchaElement.evaluate(img => img.src);
+            const captchaCode = await solveImageCaptcha(imageBase64);
+            await page.locator('[placeholder="上の画像の数字を入力"]').fill(captchaCode);
+        
+        } else {
+            console.log('未在页面上检测到已知类型的验证码，将直接尝试提交。');
+        }
+
+        console.log('验证码处理完毕，正在提交续订...');
+        await page.locator('text=無料VPSの利用を継続する').click();
+        await page.waitForNavigation({ waitUntil: 'networkidle2' });
+
+        const successMessage = await page.evaluate(() => document.body.textContent.includes('手続きが完了しました'));
+        if (successMessage) {
+            console.log('成功！VPS 续期完成。');
+        } else {
+            console.log('续期可能未成功，请检查最终页面内容。');
+        }
+        await page.screenshot({ path: 'final_page.png' });
 
     } catch (e) {
         console.error('脚本执行过程中发生错误:', e);
         await page.screenshot({ path: 'error.png' });
-        console.log('已将发生错误时的页面截图保存为 `error.png`。');
     } finally {
-        console.log('5秒后将关闭浏览器...');
+        // await recorder.stop(); // 如需录制，取消此行注释
+        console.log('任务完成，5秒后将关闭浏览器...');
         await delay(5000);
         await browser.close();
     }
 }
 
-// 执行脚本
 main();
