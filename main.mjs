@@ -199,6 +199,9 @@ async function main() {
             console.log('未找到“确认是人类”复选框。');
         }
 
+        // 在最终提交前增加一个短暂的延时，给页面脚本留出反应时间
+        console.log('等待2秒以确保所有验证脚本执行完毕...');
+        await delay(2000);
 
         console.log('所有验证码处理完毕，正在提交续订...');
         await page.locator('text=無料VPSの利用を継続する').click();
