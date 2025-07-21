@@ -76,12 +76,15 @@ async function main() {
         process.exit(1);
     }
 
-    const args = ['--no-sandbox', '--disable-setuid-sandbox'];
+    const args = [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+    ];
+
+    // --- 从环境变量读取并配置代理 ---
     if (process.env.PROXY_SERVER) {
-        const proxy_url = new URL(process.env.PROXY_SERVER);
-        proxy_url.username = '';
-        proxy_url.password = '';
-        args.push(`--proxy-server=${proxy_url.toString().replace(/\/$/, '')}`);
+        console.log(`检测到代理服务器配置，正在使用: ${process.env.PROXY_SERVER}`);
+        args.push(`--proxy-server=${process.env.PROXY_SERVER}`);
     }
 
     const browser = await puppeteer.launch({
@@ -91,18 +94,21 @@ async function main() {
     });
 
     const page = (await browser.pages())[0];
+    
+    // --- 如果提供了用户名和密码，则进行代理身份验证 ---
+    if (process.env.PROXY_SERVER && process.env.PROXY_USERNAME && process.env.PROXY_PASSWORD) {
+        console.log(`正在为代理服务器进行身份验证...`);
+        await page.authenticate({
+            username: process.env.PROXY_USERNAME,
+            password: process.env.PROXY_PASSWORD
+        });
+    }
+
     const userAgent = await browser.userAgent();
     await page.setUserAgent(userAgent.replace('Headless', ''));
     const recorder = await page.screencast({ path: 'recording.webm' }); // 启用屏幕录制
 
     try {
-        if (process.env.PROXY_SERVER) {
-            const { username, password } = new URL(process.env.PROXY_SERVER);
-            if (username && password) {
-                await page.authenticate({ username, password });
-            }
-        }
-
         console.log('正在访问登录页面...');
         await page.goto('https://secure.xserver.ne.jp/xapanel/login/xvps/', { waitUntil: 'networkidle2' });
         
@@ -126,9 +132,37 @@ async function main() {
         await page.waitForNavigation({ waitUntil: 'networkidle2' });
         console.log('已到达最终确认页面，正在处理验证码...');
 
-        // --- 验证码处理逻辑（按顺序处理） ---
+        // --- 验证码处理逻辑 ---
 
-        // 1. 处理图形验证码 (使用您指定的API)
+        // 1. 循环处理 Cloudflare Turnstile (使用 2Captcha)
+        while (true) {
+            const turnstileElement = await page.$('div.cf-turnstile');
+            if (turnstileElement) {
+                console.log('检测到 Cloudflare Turnstile，正在处理...');
+                const sitekey = await turnstileElement.evaluate(el => el.getAttribute('data-sitekey'));
+                const pageUrl = page.url();
+                const token = await solveTurnstile(sitekey, pageUrl);
+                
+                console.log('正在将 Turnstile 令牌注入页面...');
+                await page.evaluate((tokenValue) => {
+                    const responseElement = document.querySelector('[name="cf-turnstile-response"]');
+                    if (responseElement) {
+                        responseElement.value = tokenValue;
+                    }
+                    const callbackName = document.querySelector('.cf-turnstile')?.dataset.callback;
+                    if (callbackName && typeof window[callbackName] === 'function') {
+                        window[callbackName](tokenValue);
+                    }
+                }, token);
+                console.log('Turnstile 令牌已注入。等待3秒让页面反应...');
+                await delay(3000); // 等待页面可能发生的动态变化
+            } else {
+                console.log('未再检测到 Cloudflare Turnstile，继续下一步。');
+                break; // 如果找不到CF验证，则退出循环
+            }
+        }
+
+        // 2. 接着处理图形验证码 (使用您指定的API)
         const imageCaptchaElement = await page.$('img[src^="data:"]');
         if (imageCaptchaElement) {
             console.log('检测到图形验证码，正在使用您的API处理...');
@@ -141,29 +175,6 @@ async function main() {
             console.log('未找到图形验证码。');
         }
 
-        // 2. 处理 Cloudflare Turnstile (使用 2Captcha)
-        const turnstileElement = await page.$('div.cf-turnstile');
-        if (turnstileElement) {
-            console.log('检测到 Cloudflare Turnstile，正在处理...');
-            const sitekey = await turnstileElement.evaluate(el => el.getAttribute('data-sitekey'));
-            const pageUrl = page.url();
-            const token = await solveTurnstile(sitekey, pageUrl);
-            
-            console.log('正在将 Turnstile 令牌注入页面...');
-            await page.evaluate((tokenValue) => {
-                const responseElement = document.querySelector('[name="cf-turnstile-response"]');
-                if (responseElement) {
-                    responseElement.value = tokenValue;
-                }
-                const callbackName = document.querySelector('.cf-turnstile')?.dataset.callback;
-                if (callbackName && typeof window[callbackName] === 'function') {
-                    window[callbackName](tokenValue);
-                }
-            }, token);
-            console.log('Turnstile 令牌已注入。');
-        } else {
-            console.log('未找到 Cloudflare Turnstile。');
-        }
 
         console.log('所有验证码处理完毕，正在提交续订...');
         await page.locator('text=無料VPSの利用を継続する').click();
