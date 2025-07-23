@@ -194,7 +194,6 @@ async function main() {
 
         // 3. 勾选确认复选框 (已修复 - 使用现代的 Locator API)
         console.log('正在通过 Locator API 查找并点击“确认是人类”复选框...');
-        // page.$x 已被废弃。推荐使用 page.locator()，它会自动等待元素出现并变为可交互状态。
         const checkboxLocator = page.locator('::-p-xpath(//label[contains(., "人間であることを確認します")])');
         await checkboxLocator.click();
         console.log('复选框已成功点击。');
