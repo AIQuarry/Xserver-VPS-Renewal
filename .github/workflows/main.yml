@@ -24,9 +24,6 @@ jobs:
           EMAIL: ${{ secrets.EMAIL }}
           PASSWORD: ${{ secrets.PASSWORD }}
           TWOCAPTCHA_API_KEY: ${{ secrets.TWOCAPTCHA_API_KEY }}
-          PROXY_PASSWORD: ${{ secrets.PROXY_PASSWORD }}
-          PROXY_USERNAME: ${{ secrets.PROXY_USERNAME }}
-          PROXY_SERVER: ${{ secrets.PROXY_SERVER }}
       - uses: actions/upload-artifact@v4
         with:
           path: |
