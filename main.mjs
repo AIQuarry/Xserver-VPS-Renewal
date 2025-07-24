@@ -142,7 +142,7 @@ async function main() {
         await page.locator('#memberid').fill(process.env.EMAIL);
         await page.locator('#user_password').fill(process.env.PASSWORD);
 
-        // FIX: Combine the click action and the navigation wait to prevent race conditions.
+        // Combine the click action and the navigation wait to prevent race conditions.
         console.log('Clicking login button and waiting for navigation...');
         await Promise.all([
             page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }),
@@ -157,7 +157,9 @@ async function main() {
         ]);
         
         console.log('On server detail page, clicking update button...');
-        const updateButtonSelector = 'a.button.button-primary:has-text("更新する")';
+        // FIX: Use a more robust XPath selector to find the update button.
+        // This looks for a link (a) that contains the text "更新する" and has "button-primary" in its class.
+        const updateButtonSelector = '::-p-xpath(//a[contains(., "更新する") and contains(@class, "button-primary")])';
         await Promise.all([
             page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }),
             page.locator(updateButtonSelector).click(),
