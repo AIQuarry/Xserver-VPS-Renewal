@@ -147,8 +147,9 @@ async function main() {
         await page.type('#user_password', process.env.PASSWORD);
 
         console.log('Clicking login button...');
-        await page.waitForSelector('button[type="submit"]', { visible: true });
-        await page.click('button[type="submit"]');
+        // FIX: Use the Locator API with a text-based selector for robustness.
+        // This automatically waits for the button to be visible and clickable, preventing timeouts.
+        await page.locator('::-p-text(ログインする)').click();
 
         await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 });
         console.log('Login successful, navigating to server detail page...');
@@ -230,10 +231,13 @@ async function main() {
         // 3. Tick the confirmation checkbox
         console.log('Finding and clicking the "confirm I am human" checkbox...');
         const checkboxXpath = '//label[contains(., "人間であることを確認します")]/input[@type="checkbox"]';
-        const checkboxHandles = await page.waitForXPath(checkboxXpath, { visible: true });
+        
+        // FIX: Use the modern `waitForSelector` with a `::-p-xpath` prefix instead of the deprecated `waitForXPath`.
+        const checkboxSelector = `::-p-xpath(${checkboxXpath})`;
+        const checkboxHandle = await page.waitForSelector(checkboxSelector, { visible: true });
 
-        if (checkboxHandles) {
-            await checkboxHandles.click();
+        if (checkboxHandle) {
+            await checkboxHandle.click();
             console.log('Checkbox successfully clicked.');
         } else {
             console.log('Could not find the "confirm I am human" checkbox.');
