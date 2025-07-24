@@ -1,231 +1,159 @@
-import puppeteer from 'puppeteer-extra';
-import StealthPlugin from 'puppeteer-extra-plugin-stealth';
-import { setTimeout as delay } from 'node:timers/promises';
+import puppeteer from 'puppeteer'
+import { setTimeout } from 'node:timers/promises'
 
-// Apply the Stealth plugin to evade anti-bot detection
-puppeteer.use(StealthPlugin());
-
-// --- 2Captcha Configuration ---
-const TWOCAPTCHA_API_KEY = process.env.TWOCAPTCHA_API_KEY;
+// --- 2Captcha 配置 ---
+const TWOCAPTCHA_API_KEY = process.env.TWOCAPTCHA_API_KEY
 
 /**
- * Polls the 2Captcha API to get the solved result.
- * @param {string} captchaId - The captcha task ID obtained from /in.php.
- * @returns {Promise<string>} - The solved token or captcha text.
+ * 轮询查询 2Captcha API 获取已解决的结果
+ * @param {string} captchaId - 从 /in.php 获取的验证码任务ID
+ * @returns {Promise<string>} - 解决后的令牌 (token) 或验证码文本
  */
 async function pollFor2CaptchaResult(captchaId) {
-    console.log(`Task submitted to 2Captcha, ID: ${captchaId}. Waiting for server to process...`);
-
-    await delay(20000); // Initial delay to allow server to process
+    console.log(`任务提交至 2Captcha, ID: ${captchaId}，正在等待服务器处理...`)
+    
+    // 初始等待时间，给服务器接收任务的时间
+    await setTimeout(20000)
 
     while (true) {
         try {
-            const resultResponse = await fetch(`https://2captcha.com/res.php?key=${TWOCAPTCHA_API_KEY}&action=get&id=${captchaId}&json=1`);
-            const result = await resultResponse.json();
+            const resultResponse = await fetch(`https://2captcha.com/res.php?key=${TWOCAPTCHA_API_KEY}&action=get&id=${captchaId}&json=1`)
+            const result = await resultResponse.json()
 
             if (result.status === 1) {
-                console.log(`2Captcha solved successfully! Result: ${result.request.substring(0, 30)}...`);
-                return result.request;
+                console.log(`2Captcha 解决成功！结果: ${result.request.substring(0, 30)}...`)
+                return result.request
             }
 
             if (result.request !== 'CAPCHA_NOT_READY') {
-                throw new Error(`Error during 2Captcha solving: ${result.request}`);
+                throw new Error(`在 2Captcha 解决过程中发生错误: ${result.request}`)
             }
 
-            console.log('2Captcha CAPTCHA not solved yet, retrying in 10 seconds...');
-            await delay(10000);
+            console.log('2Captcha 验证码尚未解决，10秒后重试...')
+            await setTimeout(10000)
         } catch (error) {
-            console.error("Network error while polling 2Captcha results:", error);
-            await delay(10000); // Retry after delay if network issues occur
+            console.error("轮询 2Captcha 结果时发生网络错误:", error)
+            await setTimeout(10000)
         }
     }
 }
 
+/**
+ * 使用 2Captcha 解决 Cloudflare Turnstile
+ * @param {string} sitekey - 从页面 HTML 中获取的 data-sitekey
+ * @param {string} pageUrl - 出现 Turnstile 的页面的完整URL
+ * @param {string} action - (可选) 从 data-action 属性获取的值
+ * @param {string} cdata - (可选) 从 data-cdata 属性获取的值
+ * @returns {Promise<string>} - 解决后的 Turnstile 令牌
+ */
 async function solveTurnstile(sitekey, pageUrl, action, cdata) {
-    console.log('Requesting Turnstile solve from 2Captcha...');
+    console.log('正在请求 2Captcha 解决 Turnstile...')
     const payload = new URLSearchParams({
         key: TWOCAPTCHA_API_KEY,
         method: 'turnstile',
-        sitekey,
+        sitekey: sitekey,
         pageurl: pageUrl,
         json: 1
-    });
-
+    })
     if (action) {
-        payload.append('action', action);
-        console.log(`Including action: ${action}`);
+        payload.append('action', action)
+        console.log(`包含 action: ${action}`)
     }
     if (cdata) {
-        payload.append('cdata', cdata);
-        console.log(`Including cdata: ${cdata}`);
+        payload.append('cdata', cdata)
+        console.log(`包含 cdata: ${cdata}`)
     }
 
     const sendResponse = await fetch('https://2captcha.com/in.php', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: payload.toString()
-    });
+    })
 
-    const sendResult = await sendResponse.json();
+    const sendResult = await sendResponse.json()
     if (sendResult.status !== 1) {
-        throw new Error(`Failed to send Turnstile request to 2Captcha: ${sendResult.request}`);
+        throw new Error(`向 2Captcha 发送 Turnstile 请求失败: ${sendResult.request}`)
     }
-    return pollFor2CaptchaResult(sendResult.request);
+    return pollFor2CaptchaResult(sendResult.request)
 }
 
-/**
- * Main execution function.
- */
-async function main() {
-    if (!TWOCAPTCHA_API_KEY || !process.env.EMAIL || !process.env.PASSWORD) {
-        console.error('Error: Please ensure TWOCAPTCHA_API_KEY, EMAIL, and PASSWORD environment variables are set.');
-        process.exit(1);
-    }
+const args = ['--no-sandbox', '--disable-setuid-sandbox']
+if (process.env.PROXY_SERVER) {
+    const proxy_url = new URL(process.env.PROXY_SERVER)
+    proxy_url.username = ''
+    proxy_url.password = ''
+    args.push(`--proxy-server=${proxy_url}`.replace(/\/$/, ''))
+}
 
-    const args = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-infobars', '--window-size=1280,800'];
+const browser = await puppeteer.launch({
+    defaultViewport: { width: 1080, height: 1024 },
+    args,
+})
+const [page] = await browser.pages()
+const userAgent = await browser.userAgent()
+await page.setUserAgent(userAgent.replace('Headless', ''))
+const recorder = await page.screencast({ path: 'recording.webm' })
 
+try {
     if (process.env.PROXY_SERVER) {
-        console.log(`Using proxy server: ${process.env.PROXY_SERVER}`);
-        args.push(`--proxy-server=${process.env.PROXY_SERVER}`);
-    }
-
-    const browser = await puppeteer.launch({
-        args,
-        headless: 'new', // Use the new headless mode for better compatibility
-        ignoreHTTPSErrors: true,
-    });
-
-    const page = (await browser.pages())[0];
-    await page.setViewport({ width: 1280, height: 800 });
-
-    if (process.env.PROXY_SERVER && process.env.PROXY_USERNAME && process.env.PROXY_PASSWORD) {
-        console.log(`Authenticating for proxy server...`);
-        await page.authenticate({
-            username: process.env.PROXY_USERNAME,
-            password: process.env.PROXY_PASSWORD
-        });
-    }
-
-    const originalUserAgent = await browser.userAgent();
-    const userAgent = originalUserAgent.replace('HeadlessChrome', 'Chrome');
-    console.log('Setting User-Agent to:', userAgent);
-    await page.setUserAgent(userAgent);
-
-    const recorder = await page.screencast({ path: 'recording.webm' }); // Enable screen recording
-
-    try {
-        console.log('Navigating to login page...');
-        await page.goto('https://secure.xserver.ne.jp/xapanel/login/xvps/', { waitUntil: 'networkidle2', timeout: 60000 });
-
-        console.log('Filling in login information...');
-        await page.waitForSelector('#memberid', { visible: true });
-        await page.type('#memberid', process.env.EMAIL);
-
-        await page.waitForSelector('#user_password', { visible: true });
-        await page.type('#user_password', process.env.PASSWORD);
-
-        console.log('Clicking login button...');
-        await page.locator('text=ログインする').click();
-
-        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 });
-        console.log('Login successful, navigating to server detail page...');
-        
-        const serverDetailLinkSelector = 'a[href^="/xapanel/xvps/server/detail?id="]';
-        await page.waitForSelector(serverDetailLinkSelector, { visible: true });
-        await page.click(serverDetailLinkSelector);
-        
-        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 });
-        console.log('On server detail page.');
-
-        const updateButtonSelector = 'a.button.button-primary';
-        await page.waitForSelector(updateButtonSelector, { visible: true });
-        await page.click(updateButtonSelector);
-        console.log('Clicked "Update" button');
-
-        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 });
-        
-        const continueFreeButtonSelector = 'a.button.button-primary[href*="contract_update_free_confirm"]';
-        await page.waitForSelector(continueFreeButtonSelector, { visible: true });
-        await page.click(continueFreeButtonSelector);
-        console.log('Clicked "Continue using free VPS"');
-        
-        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 });
-        console.log('Arrived at final confirmation page, processing CAPTCHA...');
-
-        // Handle Cloudflare Turnstile (using 2Captcha)
-        const turnstileElement = await page.$('div.cf-turnstile');
-        if (turnstileElement) {
-            console.log('Cloudflare Turnstile detected, processing...');
-            const turnstileDetails = await turnstileElement.evaluate(el => ({
-                sitekey: el.getAttribute('data-sitekey'),
-                action: el.getAttribute('data-action'),
-                cdata: el.getAttribute('data-cdata'),
-            }));
-            
-            const pageUrl = page.url();
-            const token = await solveTurnstile(turnstileDetails.sitekey, pageUrl, turnstileDetails.action, turnstileDetails.cdata);
-            
-            console.log('Injecting Turnstile token into page...');
-            await page.evaluate((tokenValue) => {
-                const responseElement = document.querySelector('[name="cf-turnstile-response"]');
-                if (responseElement) {
-                    responseElement.value = tokenValue;
-                }
-                const callbackName = document.querySelector('.cf-turnstile')?.dataset.callback;
-                if (callbackName && typeof window[callbackName] === 'function') {
-                    window[callbackName](tokenValue);
-                }
-            }, token);
-            console.log('Turnstile token injected.');
-        } else {
-            console.log('Cloudflare Turnstile not detected.');
+        const { username, password } = new URL(process.env.PROXY_SERVER)
+        if (username && password) {
+            await page.authenticate({ username, password })
         }
+    }
 
-        // Handle Image CAPTCHA (if present)
-        const imageCaptchaElement = await page.$('img[src^="data:image/png;base64,"]');
-        if (imageCaptchaElement) {
-            console.log('Image CAPTCHA detected, processing with your API...');
-            const base64Image = await imageCaptchaElement.evaluate(img => img.src);
-            const codeResponse = await fetch('https://captcha-120546510085.asia-northeast1.run.app', { 
-                method: 'POST', 
-                headers: {'Content-Type': 'text/plain'},
-                body: base64Image 
-            });
-            if (!codeResponse.ok) {
-                throw new Error(`Image CAPTCHA API failed with status: ${codeResponse.status}`);
+    // 登录页面
+    await page.goto('https://secure.xserver.ne.jp/xapanel/login/xvps/', { waitUntil: 'networkidle2' })
+    await page.locator('#memberid').fill(process.env.EMAIL)
+    await page.locator('#user_password').fill(process.env.PASSWORD)
+    await page.locator('text=ログインする').click()
+    await page.waitForNavigation({ waitUntil: 'networkidle2' })
+
+    // 进入服务器详情页面
+    await page.locator('a[href^="/xapanel/xvps/server/detail?id="]').click()
+    await page.locator('text=更新する').click()
+    await page.locator('text=引き続き無料VPSの利用を継続する').click()
+    await page.waitForNavigation({ waitUntil: 'networkidle2' })
+
+    // 处理 Cloudflare Turnstile 验证
+    const turnstileElement = await page.$('div.cf-turnstile')
+    if (turnstileElement) {
+        console.log('检测到 Cloudflare Turnstile，正在处理...')
+        const turnstileDetails = await turnstileElement.evaluate(el => ({
+            sitekey: el.getAttribute('data-sitekey'),
+            action: el.getAttribute('data-action'),
+            cdata: el.getAttribute('data-cdata'),
+        }))
+        
+        const pageUrl = page.url()
+        const token = await solveTurnstile(turnstileDetails.sitekey, pageUrl, turnstileDetails.action, turnstileDetails.cdata)
+
+        console.log('正在将 Turnstile 令牌注入页面...')
+        await page.evaluate((tokenValue) => {
+            const responseElement = document.querySelector('[name="cf-turnstile-response"]')
+            if (responseElement) {
+                responseElement.value = tokenValue
             }
-            const code = await codeResponse.text();
-            console.log(`Image CAPTCHA recognition result: ${code}`);
-            await page.type('[placeholder="上の画像の数字を入力"]', code);
-            console.log('Image CAPTCHA filled.');
-        } else {
-            console.log('Image CAPTCHA not found.');
-        }
-
-        console.log('All CAPTCHA handling complete, submitting renewal...');
-        const finalSubmitButtonSelector = 'button.button.button-primary[type="submit"]';
-        await page.waitForSelector(finalSubmitButtonSelector, { visible: true });
-        await page.click(finalSubmitButtonSelector);
-        
-        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 });
-
-        const successMessage = await page.evaluate(() => document.body.innerText.includes('手続きが完了しました'));
-        if (successMessage) {
-            console.log('SUCCESS! VPS renewal completed.');
-        } else {
-            console.log('Renewal may not have been successful. Please check the final page content.');
-        }
-        await page.screenshot({ path: 'final_page.png', fullPage: true });
-
-    } catch (e) {
-        console.error('An error occurred during script execution:', e);
-        await page.screenshot({ path: 'error.png', fullPage: true });
-    } finally {
-        await recorder.stop(); // Stop recording and save the file
-        console.log('Task finished. Browser will close in 5 seconds...');
-        await delay(5000);
-        await browser.close();
+            const callbackName = document.querySelector('.cf-turnstile')?.dataset.callback
+            if (callbackName && typeof window[callbackName] === 'function') {
+                window[callbackName](tokenValue)
+            }
+        }, token)
+        console.log('Turnstile 令牌已注入。')
+    } else {
+        console.log('未检测到 Cloudflare Turnstile。')
     }
-}
 
-main();
+    // 图形验证码处理
+    const body = await page.$eval('img[src^="data:"]', img => img.src)
+    const code = await fetch('https://captcha-120546510085.asia-northeast1.run.app', { method: 'POST', body }).then(r => r.text())
+    await page.locator('[placeholder="上の画像の数字を入力"]').fill(code)
+    await page.locator('text=無料VPSの利用を継続する').click()
+
+} catch (e) {
+    console.error(e)
+} finally {
+    await setTimeout(5000)
+    await recorder.stop()
+    await browser.close()
+}
