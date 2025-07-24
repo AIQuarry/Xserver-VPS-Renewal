@@ -142,40 +142,37 @@ async function main() {
         await page.locator('#memberid').fill(process.env.EMAIL);
         await page.locator('#user_password').fill(process.env.PASSWORD);
 
-        // Combine the click action and the navigation wait to prevent race conditions.
-        console.log('Clicking login button and waiting for navigation...');
-        await Promise.all([
-            page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }),
-            page.locator('::-p-text(ログインする)').click(),
-        ]);
+        console.log('Clicking login button...');
+        await page.locator('::-p-text(ログインする)').click();
 
-        console.log('Login successful, clicking server detail link...');
-        const serverDetailLinkSelector = 'a[href^="/xapanel/xvps/server/detail?id="]';
-        await Promise.all([
-            page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }),
-            page.locator(serverDetailLinkSelector).click(),
-        ]);
+        console.log('Login successful, waiting for server detail page link to appear...');
+        const serverDetailLinkLocator = page.locator('a[href^="/xapanel/xvps/server/detail?id="]');
+        await serverDetailLinkLocator.waitFor({ state: 'visible', timeout: 60000 });
+        console.log('Clicking server detail link...');
+        await serverDetailLinkLocator.click();
         
-        console.log('On server detail page, clicking update button...');
-        // FIX: Use a more robust XPath selector to find the update button.
-        // This looks for a link (a) that contains the text "更新する" and has "button-primary" in its class.
-        const updateButtonSelector = '::-p-xpath(//a[contains(., "更新する") and contains(@class, "button-primary")])';
-        await Promise.all([
-            page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }),
-            page.locator(updateButtonSelector).click(),
-        ]);
-        console.log('Clicked "Update" button');
+        console.log('On server detail page. Waiting for the update button to be visible...');
+        // FIX: Adopt a step-by-step defensive strategy. Wait, screenshot, then click.
+        const updateButtonLocator = page.locator('::-p-xpath(//a[contains(., "更新する") and contains(@class, "button")])');
+        await updateButtonLocator.waitFor({ state: 'visible', timeout: 30000 });
+
+        console.log('Update button is visible. Taking screenshot before click for debugging...');
+        await page.screenshot({ path: 'debug_before_update_click.png' });
+
+        console.log('Clicking the update button...');
+        await updateButtonLocator.click();
         
-        console.log('Waiting for "Continue using free VPS" button...');
-        const continueFreeButtonSelector = 'a.button.button-primary[href*="contract_update_free_confirm"]';
-        await Promise.all([
-            page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }),
-            page.locator(continueFreeButtonSelector).click(),
-        ]);
-        console.log('Clicked "Continue using free VPS"');
-        
-        console.log('Arrived at final confirmation page, processing CAPTCHA...');
-        // On this page, we wait for the captcha elements themselves, so no explicit wait is needed here.
+        console.log('Clicked "Update" button. Waiting for the "Continue" button to appear...');
+        const continueButtonLocator = page.locator('::-p-xpath(//a[contains(., "引き続き無料VPSの利用を継続する")])');
+        await continueButtonLocator.waitFor({ state: 'visible', timeout: 60000 });
+        console.log('Clicking "Continue" button...');
+        await continueButtonLocator.click();
+
+        console.log('Clicked "Continue" button. Waiting for the final confirmation page to load...');
+        // Wait for an element on the final page, like the captcha input, to ensure the page is ready.
+        const captchaInputLocator = page.locator('[placeholder="上の画像の数字を入力"]');
+        await captchaInputLocator.waitFor({ state: 'visible', timeout: 60000 });
+        console.log('Final confirmation page loaded. Processing CAPTCHA...');
 
         // --- CAPTCHA Handling Logic ---
 
