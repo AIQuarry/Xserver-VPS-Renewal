@@ -6,7 +6,6 @@ import { setTimeout as delay } from 'node:timers/promises';
 puppeteer.use(StealthPlugin());
 
 // --- 2Captcha Configuration ---
-// Read the API key from environment variables.
 const TWOCAPTCHA_API_KEY = process.env.TWOCAPTCHA_API_KEY;
 
 /**
@@ -17,8 +16,7 @@ const TWOCAPTCHA_API_KEY = process.env.TWOCAPTCHA_API_KEY;
 async function pollFor2CaptchaResult(captchaId) {
     console.log(`Task submitted to 2Captcha, ID: ${captchaId}. Waiting for server to process...`);
 
-    // Initial delay to allow the server to receive the task
-    await delay(20000);
+    await delay(20000); // Initial delay to allow server to process
 
     while (true) {
         try {
@@ -31,36 +29,28 @@ async function pollFor2CaptchaResult(captchaId) {
             }
 
             if (result.request !== 'CAPCHA_NOT_READY') {
-                throw new Error(`An error occurred during 2Captcha solving process: ${result.request}`);
+                throw new Error(`Error during 2Captcha solving: ${result.request}`);
             }
 
             console.log('2Captcha CAPTCHA not solved yet, retrying in 10 seconds...');
             await delay(10000);
         } catch (error) {
             console.error("Network error while polling 2Captcha results:", error);
-            // Wait before retrying in case of network issues
-            await delay(10000);
+            await delay(10000); // Retry after delay if network issues occur
         }
     }
 }
 
-/**
- * Solves Cloudflare Turnstile using 2Captcha.
- * @param {string} sitekey - The data-sitekey from the page's HTML.
- * @param {string} pageUrl - The full URL of the page with the Turnstile challenge.
- * @param {string} [action] - The value from the data-action attribute (optional).
- * @param {string} [cdata] - The value from the data-cdata attribute (optional).
- * @returns {Promise<string>} - The solved Turnstile token.
- */
 async function solveTurnstile(sitekey, pageUrl, action, cdata) {
     console.log('Requesting Turnstile solve from 2Captcha...');
     const payload = new URLSearchParams({
         key: TWOCAPTCHA_API_KEY,
         method: 'turnstile',
-        sitekey: sitekey,
+        sitekey,
         pageurl: pageUrl,
         json: 1
     });
+
     if (action) {
         payload.append('action', action);
         console.log(`Including action: ${action}`);
@@ -70,7 +60,6 @@ async function solveTurnstile(sitekey, pageUrl, action, cdata) {
         console.log(`Including cdata: ${cdata}`);
     }
 
-    // IMPORTANT: 2Captcha's in.php endpoint expects form data, not JSON.
     const sendResponse = await fetch('https://2captcha.com/in.php', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -84,27 +73,19 @@ async function solveTurnstile(sitekey, pageUrl, action, cdata) {
     return pollFor2CaptchaResult(sendResult.request);
 }
 
-
 /**
  * Main execution function.
  */
 async function main() {
-    // Check for necessary environment variables
     if (!TWOCAPTCHA_API_KEY || !process.env.EMAIL || !process.env.PASSWORD) {
         console.error('Error: Please ensure TWOCAPTCHA_API_KEY, EMAIL, and PASSWORD environment variables are set.');
         process.exit(1);
     }
 
-    const args = [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-infobars', // Hides "Chrome is being controlled by automated test software"
-        '--window-size=1280,800',
-    ];
+    const args = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-infobars', '--window-size=1280,800'];
 
-    // --- Read and configure proxy from environment variables ---
     if (process.env.PROXY_SERVER) {
-        console.log(`Proxy server config detected, using: ${process.env.PROXY_SERVER}`);
+        console.log(`Using proxy server: ${process.env.PROXY_SERVER}`);
         args.push(`--proxy-server=${process.env.PROXY_SERVER}`);
     }
 
@@ -117,7 +98,6 @@ async function main() {
     const page = (await browser.pages())[0];
     await page.setViewport({ width: 1280, height: 800 });
 
-    // --- Authenticate proxy if username and password are provided ---
     if (process.env.PROXY_SERVER && process.env.PROXY_USERNAME && process.env.PROXY_PASSWORD) {
         console.log(`Authenticating for proxy server...`);
         await page.authenticate({
@@ -126,7 +106,6 @@ async function main() {
         });
     }
 
-    // --- Set a realistic User-Agent ---
     const originalUserAgent = await browser.userAgent();
     const userAgent = originalUserAgent.replace('HeadlessChrome', 'Chrome');
     console.log('Setting User-Agent to:', userAgent);
@@ -139,32 +118,41 @@ async function main() {
         await page.goto('https://secure.xserver.ne.jp/xapanel/login/xvps/', { waitUntil: 'networkidle2', timeout: 60000 });
 
         console.log('Filling in login information...');
-        await page.locator('#memberid').fill(process.env.EMAIL);
-        await page.locator('#user_password').fill(process.env.PASSWORD);
+        await page.waitForSelector('#memberid', { visible: true });
+        await page.type('#memberid', process.env.EMAIL);
+
+        await page.waitForSelector('#user_password', { visible: true });
+        await page.type('#user_password', process.env.PASSWORD);
 
         console.log('Clicking login button...');
-        await page.locator('::-p-text(ログインする)').click();
+        await page.locator('text=ログインする').click();
 
-        // FIX: Consistently use Locator API for robustness.
-        // The locator will automatically wait for the element to be ready.
-        console.log('Login successful, waiting for server detail page to load...');
-        await page.locator('a[href^="/xapanel/xvps/server/detail?id="]').click({ timeout: 60000 });
+        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 });
+        console.log('Login successful, navigating to server detail page...');
         
-        console.log('On server detail page, waiting for "Update" button...');
-        // FIX: Use a more specific locator combining class and text to ensure the correct button is clicked.
-        await page.locator('a.button.button-primary:has-text("更新する")').click({ timeout: 60000 });
+        const serverDetailLinkSelector = 'a[href^="/xapanel/xvps/server/detail?id="]';
+        await page.waitForSelector(serverDetailLinkSelector, { visible: true });
+        await page.click(serverDetailLinkSelector);
+        
+        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 });
+        console.log('On server detail page.');
+
+        const updateButtonSelector = 'a.button.button-primary';
+        await page.waitForSelector(updateButtonSelector, { visible: true });
+        await page.click(updateButtonSelector);
         console.log('Clicked "Update" button');
+
+        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 });
         
-        console.log('Waiting for "Continue using free VPS" button...');
-        await page.locator('a.button.button-primary[href*="contract_update_free_confirm"]').click({ timeout: 60000 });
+        const continueFreeButtonSelector = 'a.button.button-primary[href*="contract_update_free_confirm"]';
+        await page.waitForSelector(continueFreeButtonSelector, { visible: true });
+        await page.click(continueFreeButtonSelector);
         console.log('Clicked "Continue using free VPS"');
         
+        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 });
         console.log('Arrived at final confirmation page, processing CAPTCHA...');
-        // On this page, we wait for the captcha elements themselves, so no explicit wait is needed here.
 
-        // --- CAPTCHA Handling Logic ---
-
-        // 1. Handle Cloudflare Turnstile (using 2Captcha)
+        // Handle Cloudflare Turnstile (using 2Captcha)
         const turnstileElement = await page.$('div.cf-turnstile');
         if (turnstileElement) {
             console.log('Cloudflare Turnstile detected, processing...');
@@ -193,14 +181,14 @@ async function main() {
             console.log('Cloudflare Turnstile not detected.');
         }
 
-        // 2. Handle image CAPTCHA
+        // Handle Image CAPTCHA (if present)
         const imageCaptchaElement = await page.$('img[src^="data:image/png;base64,"]');
         if (imageCaptchaElement) {
             console.log('Image CAPTCHA detected, processing with your API...');
             const base64Image = await imageCaptchaElement.evaluate(img => img.src);
             const codeResponse = await fetch('https://captcha-120546510085.asia-northeast1.run.app', { 
                 method: 'POST', 
-                headers: {'Content-Type': 'text/plain'}, // Assuming your API expects plain text
+                headers: {'Content-Type': 'text/plain'},
                 body: base64Image 
             });
             if (!codeResponse.ok) {
@@ -208,31 +196,19 @@ async function main() {
             }
             const code = await codeResponse.text();
             console.log(`Image CAPTCHA recognition result: ${code}`);
-            await page.locator('[placeholder="上の画像の数字を入力"]').fill(code);
+            await page.type('[placeholder="上の画像の数字を入力"]', code);
             console.log('Image CAPTCHA filled.');
         } else {
             console.log('Image CAPTCHA not found.');
         }
 
-        // 3. Tick the confirmation checkbox
-        console.log('Finding and clicking the "confirm I am human" checkbox...');
-        const checkboxXpath = '//label[contains(., "人間であることを確認します")]/input[@type="checkbox"]';
-        await page.locator(`::-p-xpath(${checkboxXpath})`).click();
-        console.log('Checkbox successfully clicked.');
-
-        console.log('Waiting 2 seconds to ensure all validation scripts have run...');
-        await delay(2000);
-
         console.log('All CAPTCHA handling complete, submitting renewal...');
-        const finalSubmitLocator = page.locator('button.button.button-primary[type="submit"]');
+        const finalSubmitButtonSelector = 'button.button.button-primary[type="submit"]';
+        await page.waitForSelector(finalSubmitButtonSelector, { visible: true });
+        await page.click(finalSubmitButtonSelector);
         
-        // The final click triggers a full navigation. We combine the click
-        // and the navigation wait into one promise to avoid race conditions.
-        await Promise.all([
-            page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }),
-            finalSubmitLocator.click()
-        ]);
-        
+        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 });
+
         const successMessage = await page.evaluate(() => document.body.innerText.includes('手続きが完了しました'));
         if (successMessage) {
             console.log('SUCCESS! VPS renewal completed.');
