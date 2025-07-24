@@ -139,32 +139,37 @@ async function main() {
         await page.goto('https://secure.xserver.ne.jp/xapanel/login/xvps/', { waitUntil: 'networkidle2', timeout: 60000 });
 
         console.log('Filling in login information...');
-        await page.waitForSelector('#memberid', { visible: true });
-        await page.type('#memberid', process.env.EMAIL);
+        await page.locator('#memberid').fill(process.env.EMAIL);
+        await page.locator('#user_password').fill(process.env.PASSWORD);
 
-        await page.waitForSelector('#user_password', { visible: true });
-        await page.type('#user_password', process.env.PASSWORD);
+        // FIX: Combine the click action and the navigation wait to prevent race conditions.
+        console.log('Clicking login button and waiting for navigation...');
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }),
+            page.locator('::-p-text(ログインする)').click(),
+        ]);
 
-        console.log('Clicking login button...');
-        await page.locator('::-p-text(ログインする)').click();
-
-        // FIX: Instead of waiting for navigation, wait for an element on the next page.
-        // This is more reliable for Single-Page Applications (SPAs).
-        console.log('Login successful, waiting for server detail page to load...');
+        console.log('Login successful, clicking server detail link...');
         const serverDetailLinkSelector = 'a[href^="/xapanel/xvps/server/detail?id="]';
-        await page.waitForSelector(serverDetailLinkSelector, { visible: true, timeout: 60000 });
-        await page.click(serverDetailLinkSelector);
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }),
+            page.locator(serverDetailLinkSelector).click(),
+        ]);
         
-        console.log('On server detail page, waiting for update button...');
-        const updateButtonSelector = 'a.button.button-primary';
-        await page.waitForSelector(updateButtonSelector, { visible: true, timeout: 60000 });
-        await page.click(updateButtonSelector);
+        console.log('On server detail page, clicking update button...');
+        const updateButtonSelector = 'a.button.button-primary:has-text("更新する")';
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }),
+            page.locator(updateButtonSelector).click(),
+        ]);
         console.log('Clicked "Update" button');
         
         console.log('Waiting for "Continue using free VPS" button...');
         const continueFreeButtonSelector = 'a.button.button-primary[href*="contract_update_free_confirm"]';
-        await page.waitForSelector(continueFreeButtonSelector, { visible: true, timeout: 60000 });
-        await page.click(continueFreeButtonSelector);
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }),
+            page.locator(continueFreeButtonSelector).click(),
+        ]);
         console.log('Clicked "Continue using free VPS"');
         
         console.log('Arrived at final confirmation page, processing CAPTCHA...');
@@ -216,7 +221,7 @@ async function main() {
             }
             const code = await codeResponse.text();
             console.log(`Image CAPTCHA recognition result: ${code}`);
-            await page.type('[placeholder="上の画像の数字を入力"]', code);
+            await page.locator('[placeholder="上の画像の数字を入力"]').fill(code);
             console.log('Image CAPTCHA filled.');
         } else {
             console.log('Image CAPTCHA not found.');
@@ -225,29 +230,20 @@ async function main() {
         // 3. Tick the confirmation checkbox
         console.log('Finding and clicking the "confirm I am human" checkbox...');
         const checkboxXpath = '//label[contains(., "人間であることを確認します")]/input[@type="checkbox"]';
-        const checkboxSelector = `::-p-xpath(${checkboxXpath})`;
-        const checkboxHandle = await page.waitForSelector(checkboxSelector, { visible: true });
-
-        if (checkboxHandle) {
-            await checkboxHandle.click();
-            console.log('Checkbox successfully clicked.');
-        } else {
-            // This will now throw an error if not found due to waitForSelector, which is good.
-            console.log('Could not find the "confirm I am human" checkbox.');
-        }
+        await page.locator(`::-p-xpath(${checkboxXpath})`).click();
+        console.log('Checkbox successfully clicked.');
 
         console.log('Waiting 2 seconds to ensure all validation scripts have run...');
         await delay(2000);
 
         console.log('All CAPTCHA handling complete, submitting renewal...');
-        const finalSubmitButtonSelector = 'button.button.button-primary[type="submit"]';
-        await page.waitForSelector(finalSubmitButtonSelector, { visible: true });
+        const finalSubmitLocator = page.locator('button.button.button-primary[type="submit"]');
         
         // The final click might actually trigger a full navigation. We can combine the click
         // and the navigation wait into one promise to avoid race conditions.
         await Promise.all([
             page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }),
-            page.click(finalSubmitButtonSelector)
+            finalSubmitLocator.click()
         ]);
         
         const successMessage = await page.evaluate(() => document.body.innerText.includes('手続きが完了しました'));
@@ -260,7 +256,10 @@ async function main() {
 
     } catch (e) {
         console.error('An error occurred during script execution:', e);
-        await page.screenshot({ path: 'error.png', fullPage: true });
+        // Add a check to see if the page is still open before taking a screenshot
+        if (!page.isClosed()) {
+            await page.screenshot({ path: 'error.png', fullPage: true });
+        }
     } finally {
         await recorder.stop(); // Stop recording and save the file
         console.log('Task finished. Browser will close in 5 seconds...');
